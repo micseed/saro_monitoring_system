@@ -282,3 +282,13 @@ CREATE TABLE IF NOT EXISTS notification_state (
     FOREIGN KEY (userId) REFERENCES user(userId) ON DELETE CASCADE,
     FOREIGN KEY (logId)  REFERENCES audit_logs(logId) ON DELETE CASCADE
 );
+
+CREATE TABLE password_resets (
+    id         INT          PRIMARY KEY AUTO_INCREMENT,
+    userId     INT          NOT NULL,
+    token      VARCHAR(64)  NOT NULL UNIQUE,
+    expires_at DATETIME     NOT NULL,
+    used_at    DATETIME     DEFAULT NULL,
+    created_at DATETIME     DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (userId) REFERENCES user(userId) ON DELETE CASCADE
+);

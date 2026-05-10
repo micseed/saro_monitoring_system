@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -108,8 +108,10 @@ if (!empty($_POST['ajax_action'])) {
         }
 
         case 'edit_saro': {
-            $conn->prepare("UPDATE saro SET saro_title=?,fiscal_year=?,total_budget=?,status=? WHERE saroId=?")
-                 ->execute([trim($_POST['saro_title']??''), (int)($_POST['fiscal_year']??0), (float)($_POST['total_budget']??0), $_POST['status']??'active', $saroId]);
+            $dateReleased = !empty($_POST['date_released']) ? $_POST['date_released'] : null;
+            $validUntil   = !empty($_POST['valid_until'])   ? $_POST['valid_until']   : null;
+            $conn->prepare("UPDATE saro SET saro_title=?,fiscal_year=?,total_budget=?,date_released=?,valid_until=?,status=? WHERE saroId=?")
+                 ->execute([trim($_POST['saro_title']??''), (int)($_POST['fiscal_year']??0), (float)($_POST['total_budget']??0), $dateReleased, $validUntil, $_POST['status']??'active', $saroId]);
             echo json_encode(['success' => true]);
             break;
         }
@@ -247,6 +249,8 @@ $notifications = $notifObj->getRecentActivity((int)$_SESSION['user_id'], 10);
 $unreadCount   = $notifObj->countUnread((int)$_SESSION['user_id']);
 $approvedPwReq = $notifObj->getApprovedPasswordNotification((int)$_SESSION['user_id']);
 $cancelledCount = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='cancelled'")->fetchColumn();
+$obligatedCount = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='obligated'")->fetchColumn();
+$lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lapsed'")->fetchColumn();
 
 // 3. Fetch Procurement Activities
 $stmtProc = $conn->prepare("
@@ -577,11 +581,12 @@ if ($bur < 25) {
                 Procurement Status
             </a>
             <p class="nav-section-label">Reports</p>
-            <a href="#" class="nav-item">
+            
+            <a href="export_records.php" class="nav-item">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                 Export Records
             </a>
-            <a href="audit_logs.php" class="nav-item">
+                        <a href="audit_logs.php" class="nav-item">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
             </a>
@@ -591,6 +596,20 @@ if ($bur < 25) {
                 Cancelled SAROs
                 <?php if ($cancelledCount > 0): ?>
                 <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#b45309;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $cancelledCount ?></span>
+                <?php endif; ?>
+            </a>
+            <a href="obligated_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Obligated SAROs
+                <?php if ($obligatedCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#16a34a;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $obligatedCount ?></span>
+                <?php endif; ?>
+            </a>
+            <a href="lapsed_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Lapsed SAROs
+                <?php if ($lapsedCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#dc2626;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $lapsedCount ?></span>
                 <?php endif; ?>
             </a>
             <p class="nav-section-label">Account</p>
@@ -710,6 +729,16 @@ if ($bur < 25) {
                         <div>
                             <p class="form-label">Fiscal Year</p>
                             <p style="font-size:14px;font-weight:700;color:#0f172a;"><?= htmlspecialchars($saro['fiscal_year']) ?></p>
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                            <div>
+                                <p class="form-label">Date Released</p>
+                                <p style="font-size:13px;font-weight:700;color:#0f172a;"><?= $saro['date_released'] ? date('M d, Y', strtotime($saro['date_released'])) : '<span style="color:#94a3b8;font-style:italic;font-weight:400;">Not set</span>' ?></p>
+                            </div>
+                            <div>
+                                <p class="form-label">Valid Until</p>
+                                <p style="font-size:13px;font-weight:700;color:#0f172a;"><?= $saro['valid_until'] ? date('M d, Y', strtotime($saro['valid_until'])) : '<span style="color:#94a3b8;font-style:italic;font-weight:400;">Not set</span>' ?></p>
+                            </div>
                         </div>
                         <div style="padding:12px 14px;background:#f8fafc;border:1px solid #e8edf5;border-radius:10px;">
                             <p class="form-label" style="margin-bottom:4px;">Total Budget</p>
@@ -1287,6 +1316,16 @@ if ($bur < 25) {
                 <label class="form-label">Fiscal Year</label>
                 <input type="number" class="form-input" id="edit-fiscal-year" value="<?= htmlspecialchars($saro['fiscal_year']) ?>" min="2020" max="2099">
             </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div>
+                    <label class="form-label">Date Released</label>
+                    <input type="date" class="form-input" id="edit-date-released" value="<?= htmlspecialchars($saro['date_released'] ?? '') ?>">
+                </div>
+                <div>
+                    <label class="form-label">Valid Until</label>
+                    <input type="date" class="form-input" id="edit-valid-until" value="<?= htmlspecialchars($saro['valid_until'] ?? '') ?>">
+                </div>
+            </div>
             <div>
                 <label class="form-label">Total Budget (₱)</label>
                 <input type="number" class="form-input" id="edit-total-budget" value="<?= htmlspecialchars($saro['total_budget']) ?>" min="0" step="0.01">
@@ -1631,6 +1670,7 @@ if ($bur < 25) {
         postAjax({
             ajax_action: 'edit_saro', saroId: currentSaroId,
             saro_title: getVal('edit-saro-title'), fiscal_year: getVal('edit-fiscal-year'),
+            date_released: getVal('edit-date-released'), valid_until: getVal('edit-valid-until'),
             total_budget: getVal('edit-total-budget'),
             status: document.getElementById('edit-status').value,
         }).then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })

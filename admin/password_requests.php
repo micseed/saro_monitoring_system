@@ -14,17 +14,35 @@ $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
 // Handle approve / reject POST
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['request_id'])) {
-    $reqId  = (int)$_POST['request_id'];
-    $act    = $_POST['action'];
-    $note   = trim($_POST['admin_note'] ?? '');
-    if (in_array($act, ['approved', 'rejected'], true)) {
-        $stmt = $pdo->prepare("
+    $reqId = (int)$_POST['request_id'];
+    $act   = $_POST['action'];
+    $note  = trim($_POST['admin_note'] ?? '');
+
+    if ($act === 'approved') {
+        $newPw = $_POST['new_password'] ?? '';
+        if (strlen($newPw) >= 8) {
+            $pr = $pdo->prepare("SELECT userId FROM password_requests WHERE requestId = ?");
+            $pr->execute([$reqId]);
+            $target = $pr->fetch();
+            if ($target) {
+                $hash = password_hash($newPw, PASSWORD_DEFAULT);
+                $pdo->prepare("UPDATE user SET password = ?, updated_at = NOW() WHERE userId = ?")
+                    ->execute([$hash, $target['userId']]);
+                $pdo->prepare("
+                    UPDATE password_requests
+                    SET status = 'approved', admin_note = ?, resolved_by = ?, resolved_at = NOW(), applied_at = NOW()
+                    WHERE requestId = ?
+                ")->execute([$note ?: null, $adminId, $reqId]);
+            }
+        }
+    } elseif ($act === 'rejected') {
+        $pdo->prepare("
             UPDATE password_requests
-            SET status = ?, admin_note = ?, resolved_by = ?, resolved_at = NOW()
+            SET status = 'rejected', admin_note = ?, resolved_by = ?, resolved_at = NOW()
             WHERE requestId = ?
-        ");
-        $stmt->execute([$act, $note ?: null, $adminId, $reqId]);
+        ")->execute([$note ?: null, $adminId, $reqId]);
     }
+
     header('Location: password_requests.php');
     exit;
 }
@@ -38,7 +56,7 @@ $requests = $pdo->query("
     JOIN user u ON pr.userId = u.userId
     JOIN user_role ur ON ur.roleId = u.roleId
     LEFT JOIN user r ON pr.resolved_by = r.userId
-    ORDER BY pr.requested_at DESC
+    ORDER BY pr.requested_at ASC
 ")->fetchAll();
 
 $totalReq    = count($requests);
@@ -477,6 +495,35 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                     <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="flex-shrink:0;margin-top:1px;" id="modal-alert-icon"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     <p id="modal-alert-text" style="font-size:12px;font-weight:500;line-height:1.6;"></p>
                 </div>
+
+                <!-- New password field — only shown when approving -->
+                <div id="new-password-wrap" style="display:none;">
+                    <p style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">
+                        New Password <span style="color:#ef4444;">*</span>
+                    </p>
+                    <div style="position:relative;">
+                        <input type="password" id="modal-new-password" name="new_password"
+                               style="width:100%;padding:10px 40px 10px 14px;border:1px solid #e2e8f0;border-radius:9px;
+                                      font-size:13px;font-family:'Poppins',sans-serif;color:#0f172a;background:#f8fafc;
+                                      outline:none;transition:all 0.2s;box-sizing:border-box;"
+                               placeholder="Min. 8 characters"
+                               onfocus="this.style.borderColor='#16a34a';this.style.boxShadow='0 0 0 3px rgba(22,163,74,0.1)';"
+                               onblur="this.style.borderColor='#e2e8f0';this.style.boxShadow='none';">
+                        <button type="button" onclick="toggleModalPw()"
+                                style="position:absolute;right:12px;top:50%;transform:translateY(-50%);
+                                       background:none;border:none;cursor:pointer;color:#94a3b8;display:flex;align-items:center;">
+                            <svg id="modal-eye-open" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                            </svg>
+                            <svg id="modal-eye-closed" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="display:none;">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <p style="font-size:10px;color:#94a3b8;margin-top:5px;">Tell the user their new password after approving.</p>
+                </div>
+
                 <div>
                     <p style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Admin Note (Optional)</p>
                     <textarea name="admin_note" style="width:100%;padding:10px 14px;border:1px solid #e2e8f0;border-radius:9px;font-size:13px;font-family:'Poppins',sans-serif;color:#0f172a;background:#f8fafc;outline:none;resize:none;height:80px;transition:all 0.2s;" placeholder="Add a note for the user…" onfocus="this.style.borderColor='#ef4444';this.style.boxShadow='0 0 0 3px rgba(239,68,68,0.1)';" onblur="this.style.borderColor='#e2e8f0';this.style.boxShadow='none';"></textarea>
@@ -497,47 +544,67 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
     }
 
     function openResolve(type, name, requestId) {
-        const modal       = document.getElementById('modal-resolve');
-        const icon        = document.getElementById('modal-icon');
-        const title       = document.getElementById('modal-title');
-        const subtitle    = document.getElementById('modal-subtitle');
-        const alert       = document.getElementById('modal-alert');
-        const alertIcon   = document.getElementById('modal-alert-icon');
-        const alertText   = document.getElementById('modal-alert-text');
-        const confirmBtn  = document.getElementById('modal-confirm-btn');
+        const modal      = document.getElementById('modal-resolve');
+        const icon       = document.getElementById('modal-icon');
+        const title      = document.getElementById('modal-title');
+        const subtitle   = document.getElementById('modal-subtitle');
+        const alert      = document.getElementById('modal-alert');
+        const alertIcon  = document.getElementById('modal-alert-icon');
+        const alertText  = document.getElementById('modal-alert-text');
+        const confirmBtn = document.getElementById('modal-confirm-btn');
+        const pwWrap     = document.getElementById('new-password-wrap');
+        const pwInput    = document.getElementById('modal-new-password');
 
         document.getElementById('form-request-id').value = requestId;
         document.getElementById('form-action').value     = type === 'approve' ? 'approved' : 'rejected';
 
+        // Reset password field
+        pwInput.value = '';
+        pwInput.type  = 'password';
+        document.getElementById('modal-eye-open').style.display   = '';
+        document.getElementById('modal-eye-closed').style.display = 'none';
+
         if (type === 'approve') {
             icon.style.background = '#f0fdf4';
             icon.innerHTML = '<svg width="16" height="16" fill="none" stroke="#16a34a" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
-            title.textContent = 'Approve Password Request';
-            subtitle.textContent = name + ' · Password change';
+            title.textContent    = 'Approve Password Request';
+            subtitle.textContent = name + ' · Set a new password below';
             alert.style.background = '#f0fdf4';
-            alert.style.border = '1px solid #bbf7d0';
+            alert.style.border     = '1px solid #bbf7d0';
             alertIcon.style.stroke = '#16a34a';
-            alertText.style.color = '#166534';
-            alertText.textContent = 'Approving this request will allow ' + name + ' to reset their password.';
-            confirmBtn.textContent = '✓ Confirm Approval';
-            confirmBtn.style.background = '#16a34a';
+            alertText.style.color  = '#166534';
+            alertText.textContent  = 'Set a new password for ' + name + '. Their password will be updated immediately upon approval.';
+            confirmBtn.textContent = '✓ Approve & Reset Password';
+            confirmBtn.style.background  = '#16a34a';
             confirmBtn.style.borderColor = '#16a34a';
+            pwWrap.style.display = '';
+            pwInput.required     = true;
         } else {
             icon.style.background = '#fef2f2';
             icon.innerHTML = '<svg width="16" height="16" fill="none" stroke="#dc2626" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
-            title.textContent = 'Reject Password Request';
+            title.textContent    = 'Reject Password Request';
             subtitle.textContent = name + ' · Password change';
             alert.style.background = '#fef2f2';
-            alert.style.border = '1px solid #fecaca';
+            alert.style.border     = '1px solid #fecaca';
             alertIcon.style.stroke = '#dc2626';
-            alertText.style.color = '#991b1b';
-            alertText.textContent = 'Rejecting this request will deny ' + name + '\'s password change.';
+            alertText.style.color  = '#991b1b';
+            alertText.textContent  = 'Rejecting this request will deny ' + name + '\'s password change.';
             confirmBtn.textContent = '✕ Confirm Rejection';
-            confirmBtn.style.background = '#dc2626';
+            confirmBtn.style.background  = '#dc2626';
             confirmBtn.style.borderColor = '#dc2626';
+            pwWrap.style.display = 'none';
+            pwInput.required     = false;
         }
 
         modal.classList.add('open');
+    }
+
+    function toggleModalPw() {
+        const inp    = document.getElementById('modal-new-password');
+        const isText = inp.type === 'text';
+        inp.type = isText ? 'password' : 'text';
+        document.getElementById('modal-eye-open').style.display   = isText ? '' : 'none';
+        document.getElementById('modal-eye-closed').style.display = isText ? 'none' : '';
     }
 
     function closeModal() {

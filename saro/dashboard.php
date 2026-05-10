@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/../includes/auth.php';
 $username = $_SESSION['full_name'];
 $role     = $_SESSION['role'];
@@ -11,13 +11,15 @@ $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
 require_once __DIR__ . '/../class/notification.php';
 
-$totalSaros     = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='active'")->fetchColumn();
-$totalBudget    = (float)$pdo->query("SELECT COALESCE(SUM(total_budget),0) FROM saro WHERE status='active'")->fetchColumn();
+$totalSaros     = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status IN ('active','obligated')")->fetchColumn();
+$totalBudget    = (float)$pdo->query("SELECT COALESCE(SUM(total_budget),0) FROM saro WHERE status IN ('active','obligated')")->fetchColumn();
 $totalObligated = (float)$pdo->query("
     SELECT COALESCE(SUM(p.obligated_amount),0)
     FROM procurement p
     JOIN object_code o ON p.objectId = o.objectId
+    JOIN saro s ON s.saroId = o.saroId
     WHERE p.status = 'obligated'
+      AND s.status IN ('active','obligated')
 ")->fetchColumn();
 $unobligated = $totalBudget - $totalObligated;
 $utilRate    = $totalBudget > 0 ? round($totalObligated / $totalBudget * 100, 1) : 0;
@@ -27,6 +29,8 @@ $notifications = $notifObj->getRecentActivity((int)$_SESSION['user_id'], 10);
 $unreadCount   = $notifObj->countUnread((int)$_SESSION['user_id']);
 $approvedPwReq = $notifObj->getApprovedPasswordNotification((int)$_SESSION['user_id']);
 $cancelledCount = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='cancelled'")->fetchColumn();
+$obligatedCount = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='obligated'")->fetchColumn();
+$lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='lapsed'")->fetchColumn();
 
 $saros = $pdo->query("
     SELECT s.saroId, s.saroNo, s.saro_title, s.total_budget, s.status,
@@ -34,7 +38,7 @@ $saros = $pdo->query("
     FROM saro s
     LEFT JOIN object_code o ON o.saroId = s.saroId
     LEFT JOIN procurement p ON p.objectId = o.objectId AND p.status = 'obligated'
-    WHERE s.status = 'active'
+    WHERE s.status IN ('active','obligated')
     GROUP BY s.saroId
     ORDER BY s.created_at ASC
 ")->fetchAll();
@@ -343,6 +347,7 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
             font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
         }
         .badge-green { background: #dcfce7; color: #16a34a; }
+        .badge-blue  { background: #dbeafe; color: #1d4ed8; }
         .badge-amber { background: #fef9c3; color: #b45309; }
         .badge-red   { background: #fee2e2; color: #dc2626; }
         .badge-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
@@ -390,11 +395,12 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
             </a>
 
             <p class="nav-section-label">Reports</p>
-            <a href="#" class="nav-item">
+            
+            <a href="export_records.php" class="nav-item">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                 Export Records
             </a>
-            <a href="audit_logs.php" class="nav-item">
+                        <a href="audit_logs.php" class="nav-item">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
             </a>
@@ -404,6 +410,20 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                 Cancelled SAROs
                 <?php if ($cancelledCount > 0): ?>
                 <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#b45309;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $cancelledCount ?></span>
+                <?php endif; ?>
+            </a>
+            <a href="obligated_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Obligated SAROs
+                <?php if ($obligatedCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#16a34a;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $obligatedCount ?></span>
+                <?php endif; ?>
+            </a>
+            <a href="lapsed_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Lapsed SAROs
+                <?php if ($lapsedCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#dc2626;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $lapsedCount ?></span>
                 <?php endif; ?>
             </a>
             <p class="nav-section-label">Account</p>
@@ -625,7 +645,7 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                         </div>
                         <div>
                             <p style="font-size:13px;font-weight:800;color:#0f172a;">SARO Records</p>
-                            <p style="font-size:10px;color:#94a3b8;font-weight:500;">April 2026</p>
+                            <p style="font-size:10px;color:#94a3b8;font-weight:500;"><?= date('F Y') ?></p>
                         </div>
                     </div>
                     <div style="display:flex;align-items:center;gap:10px;">
@@ -637,9 +657,9 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                             <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>
                             Filter
                         </button>
-                        <button class="tb-btn tb-btn-primary">
-                            <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                            Export
+                        <button class="tb-btn tb-btn-primary" onclick="printObligatedSaros()">
+                            <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 2H14l4 4v14a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2zm8 0v4h4"/></svg>
+                            Print
                         </button>
                     </div>
                 </div>
@@ -672,7 +692,9 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                                 if ($bur >= 80)     { $burColor = '#16a34a'; $burBg = 'linear-gradient(90deg,#16a34a,#4ade80)'; $burLabel = 'Green — High Utilization'; }
                                 elseif ($bur >= 50) { $burColor = '#b45309'; $burBg = 'linear-gradient(90deg,#f59e0b,#fcd34d)'; $burLabel = 'Yellow — Moderate'; }
                                 else                { $burColor = '#dc2626'; $burBg = 'linear-gradient(90deg,#ef4444,#fca5a5)'; $burLabel = 'Red — Low Utilization'; }
-                                $badgeClass = $s['status'] === 'active' ? 'badge-green' : 'badge-red';
+                                if ($s['status'] === 'active')          $badgeClass = 'badge-green';
+                                elseif ($s['status'] === 'obligated')   $badgeClass = 'badge-blue';
+                                else                                    $badgeClass = 'badge-red';
                             ?>
                             <tr>
                                 <td style="color:#cbd5e1;font-weight:700;font-size:12px;"><?= str_pad($i+1,2,'0',STR_PAD_LEFT) ?></td>
@@ -738,7 +760,74 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
 <style>
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 </style>
+<style>
+    @media print {
+        @page { size: landscape; margin: 18mm 14mm; }
+        body * { visibility: hidden; }
+        #print-area, #print-area * { visibility: visible; }
+        #print-area { position: fixed; inset: 0; padding: 0; background: #fff; }
+    }
+</style>
+
+<div id="print-area" style="display:none;"></div>
+
 <script>
+const saroData = <?= json_encode(array_values(array_filter($saros, fn($s) => $s['status'] === 'obligated'))) ?>;
+
+function printObligatedSaros() {
+    const rows = saroData.map((s, i) => {
+        const bur      = s.total_budget > 0 ? (s.obligated / s.total_budget * 100).toFixed(1) : '0.0';
+        const unoblig  = (parseFloat(s.total_budget) - parseFloat(s.obligated)).toFixed(2);
+        const burLabel = bur >= 80 ? 'High Utilization' : bur >= 50 ? 'Moderate' : 'Low Utilization';
+        const fmt      = n => '₱' + parseFloat(n).toLocaleString('en-PH', {minimumFractionDigits:2, maximumFractionDigits:2});
+        return `<tr>
+            <td>${String(i + 1).padStart(2, '0')}</td>
+            <td>${s.saroNo}</td>
+            <td class="amt">${fmt(s.total_budget)}</td>
+            <td class="amt">${fmt(s.obligated)}</td>
+            <td class="amt">${fmt(unoblig)}</td>
+            <td class="center">${bur}% — ${burLabel}</td>
+            <td class="center">Obligated</td>
+        </tr>`;
+    }).join('');
+
+    const now = new Date().toLocaleDateString('en-PH', {year:'numeric', month:'long', day:'numeric'});
+
+    document.getElementById('print-area').innerHTML = `
+        <style>
+            #print-area { font-family: Arial, sans-serif; font-size: 11px; color: #111; padding: 28px 32px; }
+            #print-area .ph { margin-bottom: 16px; }
+            #print-area .ph h1 { font-size: 15px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+            #print-area .ph p { font-size: 10px; color: #555; margin-top: 3px; }
+            #print-area table { width: 100%; border-collapse: collapse; }
+            #print-area thead th { background: #1e3a8a; color: #fff; padding: 8px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; text-align: left; white-space: nowrap; }
+            #print-area thead th.amt { text-align: right; }
+            #print-area thead th.center { text-align: center; }
+            #print-area tbody tr:nth-child(even) { background: #f5f8ff; }
+            #print-area tbody td { padding: 7px 10px; border-bottom: 1px solid #e5e7eb; }
+            #print-area tbody td.amt { text-align: right; }
+            #print-area tbody td.center { text-align: center; }
+            #print-area .pf { margin-top: 16px; font-size: 10px; color: #555; text-align: right; }
+        </style>
+        <div class="ph">
+            <h1>Obligated SARO Records</h1>
+            <p>DICT — Zamboanga-BASULTA Cluster &nbsp;|&nbsp; Printed: ${now}</p>
+        </div>
+        <table>
+            <thead><tr>
+                <th>No.</th><th>SARO Number</th>
+                <th class="amt">Total Budget</th><th class="amt">Obligated</th>
+                <th class="amt">Unobligated</th><th class="center">BUR</th><th class="center">Status</th>
+            </tr></thead>
+            <tbody>${rows || '<tr><td colspan="7" style="text-align:center;padding:20px;color:#888;">No obligated SAROs found.</td></tr>'}</tbody>
+        </table>
+        <div class="pf">Total records: ${saroData.length}</div>`;
+
+    const area = document.getElementById('print-area');
+    area.style.display = 'block';
+    window.print();
+    window.onafterprint = () => { area.style.display = 'none'; };
+}
 </script>
 
 <script>

@@ -16,15 +16,16 @@ class SuperAdmin {
         $stmtReq = $this->pdo->query("SELECT COUNT(*) as pending FROM password_requests WHERE status = 'pending'");
         $requests = $stmtReq->fetch(PDO::FETCH_ASSOC);
 
-        $stmtSaro = $this->pdo->query("SELECT COUNT(*) as total, COALESCE(SUM(total_budget),0) as total_budget FROM saro WHERE status='active'");
+        $stmtSaro = $this->pdo->query("SELECT COUNT(*) as total, COALESCE(SUM(total_budget),0) as total_budget FROM saro WHERE status IN ('active','obligated')");
         $saros = $stmtSaro->fetch(PDO::FETCH_ASSOC);
 
-        // Only sum procurement rows with status='obligated' (matching saro/dashboard.php)
         $stmtProc = $this->pdo->query("
             SELECT COALESCE(SUM(p.obligated_amount),0) as total_obligated
             FROM procurement p
             JOIN object_code o ON p.objectId = o.objectId
+            JOIN saro s ON s.saroId = o.saroId
             WHERE p.status = 'obligated'
+              AND s.status IN ('active','obligated')
         ");
         $procurements = $stmtProc->fetch(PDO::FETCH_ASSOC);
 
@@ -75,9 +76,9 @@ class SuperAdmin {
             FROM saro s
             LEFT JOIN object_code oc ON oc.saroId = s.saroId
             LEFT JOIN procurement p  ON p.objectId = oc.objectId
-            WHERE s.status = 'active'
+            WHERE s.status IN ('active','obligated')
             GROUP BY s.saroId, s.saroNo, s.total_budget
-            ORDER BY s.created_at DESC
+            ORDER BY s.created_at ASC
             LIMIT :limit
         ");
         $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);

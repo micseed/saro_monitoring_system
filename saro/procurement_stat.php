@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -31,6 +31,12 @@ $saros = $stmt->fetchAll(PDO::FETCH_ASSOC);
 $cancelledCount = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='cancelled'")->fetchColumn();
 $obligatedCount = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='obligated'")->fetchColumn();
 $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lapsed'")->fetchColumn();
+
+require_once __DIR__ . '/../class/notification.php';
+$notifObj      = new Notification();
+$notifications = $notifObj->getRecentActivity($userId, 10);
+$unreadCount   = $notifObj->countUnread($userId);
+$approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -203,11 +209,12 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
                 Procurement Status
             </a>
             <p class="nav-section-label">Reports</p>
-            <a href="#" class="nav-item">
+            
+            <a href="export_records.php" class="nav-item">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                 Export Records
             </a>
-            <a href="audit_logs.php" class="nav-item">
+                        <a href="audit_logs.php" class="nav-item">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
             </a>

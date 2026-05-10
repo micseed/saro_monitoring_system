@@ -346,7 +346,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 <!-- Forgot password -->
                 <div style="text-align:right; margin-bottom:24px;">
-                    <a href="#" style="font-size:12px; color:#3b82f6; font-weight:600; text-decoration:none;"
+                    <a href="forgot_password.php" style="font-size:12px; color:#3b82f6; font-weight:600; text-decoration:none;"
                        onmouseover="this.style.color='#1d4ed8'"
                        onmouseout="this.style.color='#3b82f6'">Forgot your password?</a>
                 </div>

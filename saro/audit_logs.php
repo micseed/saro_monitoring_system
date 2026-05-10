@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -39,6 +39,8 @@ $notifications = $notifObj->getRecentActivity((int)$_SESSION['user_id'], 10);
 $unreadCount   = $notifObj->countUnread($userId);
 $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
 $cancelledCount = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='cancelled'")->fetchColumn();
+$obligatedCount = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='obligated'")->fetchColumn();
+$lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='lapsed'")->fetchColumn();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -312,11 +314,12 @@ $cancelledCount = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='canc
                 Procurement Status
             </a>
             <p class="nav-section-label">Reports</p>
-            <a href="#" class="nav-item">
+            
+            <a href="export_records.php" class="nav-item">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                 Export Records
             </a>
-            <a href="audit_logs.php" class="nav-item active">
+                        <a href="audit_logs.php" class="nav-item active">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
             </a>
@@ -326,6 +329,20 @@ $cancelledCount = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='canc
                 Cancelled SAROs
                 <?php if ($cancelledCount > 0): ?>
                 <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#b45309;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $cancelledCount ?></span>
+                <?php endif; ?>
+            </a>
+            <a href="obligated_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Obligated SAROs
+                <?php if ($obligatedCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#16a34a;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $obligatedCount ?></span>
+                <?php endif; ?>
+            </a>
+            <a href="lapsed_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Lapsed SAROs
+                <?php if ($lapsedCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#dc2626;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $lapsedCount ?></span>
                 <?php endif; ?>
             </a>
             <p class="nav-section-label">Account</p>
