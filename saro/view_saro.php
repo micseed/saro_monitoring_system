@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -108,10 +108,11 @@ if (!empty($_POST['ajax_action'])) {
         }
 
         case 'edit_saro': {
-            $dateReleased = !empty($_POST['date_released']) ? $_POST['date_released'] : null;
-            $validUntil   = !empty($_POST['valid_until'])   ? $_POST['valid_until']   : null;
-            $conn->prepare("UPDATE saro SET saro_title=?,fiscal_year=?,total_budget=?,date_released=?,valid_until=?,status=? WHERE saroId=?")
-                 ->execute([trim($_POST['saro_title']??''), (int)($_POST['fiscal_year']??0), (float)($_POST['total_budget']??0), $dateReleased, $validUntil, $_POST['status']??'active', $saroId]);
+            $dateReleased = !empty($_POST['date_released']) ? strip_tags($_POST['date_released']) : null;
+            $validUntil   = !empty($_POST['valid_until'])   ? strip_tags($_POST['valid_until'])   : null;
+            $saroTitle    = strip_tags(trim($_POST['saro_title'] ?? ''));
+            $conn->prepare("UPDATE saro SET saro_title=?,fiscal_year=?,total_budget=?,date_released=?,valid_until=? WHERE saroId=?")
+                 ->execute([$saroTitle, (int)($_POST['fiscal_year']??0), (float)($_POST['total_budget']??0), $dateReleased, $validUntil, $saroId]);
             echo json_encode(['success' => true]);
             break;
         }
@@ -151,10 +152,10 @@ if (!empty($_POST['ajax_action'])) {
 
         case 'edit_object_code': {
             $oid     = (int)($_POST['objectId']??0);
-            $newCode = trim($_POST['code']??'');
+            $newCode = strip_tags(trim($_POST['code']??''));
             $conn->prepare("UPDATE object_code SET code=?,projected_cost=? WHERE objectId=?")->execute([$newCode, (float)($_POST['projected_cost']??0), $oid]);
             $conn->prepare("DELETE FROM expense_items WHERE objectId=?")->execute([$oid]);
-            if (!empty(trim($_POST['expense_item']??''))) $conn->prepare("INSERT INTO expense_items (objectId,item_name) VALUES (?,?)")->execute([$oid, trim($_POST['expense_item'])]);
+            if (!empty(trim($_POST['expense_item']??''))) $conn->prepare("INSERT INTO expense_items (objectId,item_name) VALUES (?,?)")->execute([$oid, strip_tags(trim($_POST['expense_item']))]);
 
             // Audit log: object code edited
             $ip = $_SERVER['REMOTE_ADDR'] ?? null;
@@ -551,6 +552,15 @@ if ($bur < 25) {
         .period-pair { display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px; }
         .period-label-sep { font-size:13px;color:#94a3b8;font-weight:500;text-align:center; }
     </style>
+    <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js'></script>
+    <style>
+        .fc { font-family: 'Poppins', sans-serif; }
+        .fc-toolbar-title { font-size: 16px !important; font-weight: 700; color: #0f172a; }
+        .fc-button-primary { background-color: #3b82f6 !important; border-color: #3b82f6 !important; text-transform: capitalize; border-radius: 8px !important; }
+        .fc-button-primary:hover { background-color: #1d4ed8 !important; border-color: #1d4ed8 !important; }
+        .fc-event { border-radius: 4px; border: none; font-size: 11px; padding: 2px 4px; }
+        .fc-daygrid-event { white-space: normal !important; align-items: start; }
+    </style>
 </head>
 <body>
 <div class="layout">
@@ -838,6 +848,25 @@ if ($bur < 25) {
 
             </div>
 
+            <!-- Row 1.5: Calendar View -->
+            <div class="card" style="margin-bottom:20px;">
+                <div class="card-header">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <div style="width:32px;height:32px;border-radius:8px;background:#f0fdf4;
+                                    display:flex;align-items:center;justify-content:center;">
+                            <svg width="15" height="15" fill="none" stroke="#16a34a" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                        </div>
+                        <div>
+                            <p style="font-size:13px;font-weight:800;color:#0f172a;">Schedule Overview</p>
+                            <p style="font-size:10px;color:#94a3b8;font-weight:500;">Procurement and SARO timelines</p>
+                        </div>
+                    </div>
+                </div>
+                <div style="padding:20px;">
+                    <div id="calendar"></div>
+                </div>
+            </div>
+
             <!-- Row 2: Procurement Activities -->
             <div class="card" style="margin-bottom:0;">
                 <div class="card-header">
@@ -1071,7 +1100,7 @@ if ($bur < 25) {
             <input type="hidden" id="proc-all-docs-checked" value="0">
             <div>
                 <label class="form-label">Object Code <span style="color:#dc2626;">*</span></label>
-                <select class="form-input" id="proc-obj-code" onchange="handleProcObjChange(this)">
+                <select class="form-input" id="proc-obj-code" onchange="handleProcObjChange(this); if(this.value!==''){this.classList.remove('input-error');document.getElementById('err-proc-obj-code').style.display='none';}else{this.classList.add('input-error');document.getElementById('err-proc-obj-code').style.display='block';}">
                     <option value="">Select object code…</option>
                     <?php foreach ($objectCodes as $obj): ?>
                         <option value="<?= (int)$obj['objectId'] ?>" data-travel="<?= (int)$obj['is_travelExpense'] ?>">
@@ -1079,18 +1108,18 @@ if ($bur < 25) {
                         </option>
                     <?php endforeach; ?>
                 </select>
-                <p class="field-error" id="err-proc-obj-code"></p>
+                <p class="field-error" id="err-proc-obj-code">Object code is required!</p>
             </div>
             <div>
                 <label class="form-label">Procurement Activity <span style="color:#dc2626;">*</span></label>
-                <input type="text" class="form-input" id="proc-activity" placeholder="e.g. Laptop Computer (Core i7)">
-                <p class="field-error" id="err-proc-activity"></p>
+                <input type="text" class="form-input" id="proc-activity" placeholder="e.g. Laptop Computer (Core i7)" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-proc-activity').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-proc-activity').style.display='none'; }">
+                <p class="field-error" id="err-proc-activity">Activity name is required!</p>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
                 <div>
                     <label class="form-label">Quantity <span style="color:#dc2626;">*</span></label>
-                    <input type="number" class="form-input" id="proc-qty" placeholder="0" min="1" oninput="updateBudgetAlloc()">
-                    <p class="field-error" id="err-proc-qty"></p>
+                    <input type="number" class="form-input" id="proc-qty" placeholder="0" min="1" oninput="updateBudgetAlloc(); if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-proc-qty').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-proc-qty').style.display='none'; }">
+                    <p class="field-error" id="err-proc-qty">Quantity is required!</p>
                 </div>
                 <div>
                     <label class="form-label">Unit <span style="font-size:9px;color:#94a3b8;font-weight:500;text-transform:none;">(optional)</span></label>
@@ -1102,8 +1131,8 @@ if ($bur < 25) {
                 </div>
                 <div>
                     <label class="form-label">Unit Cost (₱) <span style="color:#dc2626;">*</span></label>
-                    <input type="number" class="form-input" id="proc-unit-cost" placeholder="0.00" min="0" step="0.01" oninput="updateBudgetAlloc()">
-                    <p class="field-error" id="err-proc-unit-cost"></p>
+                    <input type="number" class="form-input" id="proc-unit-cost" placeholder="0.00" min="0" step="0.01" oninput="updateBudgetAlloc(); if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-proc-unit-cost').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-proc-unit-cost').style.display='none'; }">
+                    <p class="field-error" id="err-proc-unit-cost">Unit cost is required!</p>
                 </div>
             </div>
             <!-- Budget allocation live display -->
@@ -1131,34 +1160,40 @@ if ($bur < 25) {
                     <div style="display:flex;flex-direction:column;gap:6px;">
                         <span style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;">Period Start</span>
                         <div style="display:grid;grid-template-columns:1fr 80px;gap:8px;">
-                            <select class="form-input" id="proc-start-month">
+                            <select class="form-input" id="proc-start-month" onchange="if(this.value!==''){this.classList.remove('input-error');document.getElementById('err-proc-start-month').style.display='none';}else{this.classList.add('input-error');document.getElementById('err-proc-start-month').style.display='block';}">
+                                <option value="">Select Month</option>
                                 <option>January</option><option>February</option><option>March</option>
                                 <option>April</option><option>May</option><option>June</option>
                                 <option>July</option><option>August</option><option>September</option>
                                 <option>October</option><option>November</option><option>December</option>
                             </select>
-                            <input type="number" class="form-input" id="proc-start-year" value="<?= htmlspecialchars($saro['fiscal_year']) ?>" min="2020" max="2099">
+                            <input type="number" class="form-input" id="proc-start-year" value="<?= htmlspecialchars($saro['fiscal_year']) ?>" min="2020" max="2099" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-proc-start-year').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-proc-start-year').style.display='none'; }">
                         </div>
+                        <p class="field-error" id="err-proc-start-month">Start month is required!</p>
+                        <p class="field-error" id="err-proc-start-year">Start year is required!</p>
                     </div>
                     <div class="period-label-sep" style="padding-top:20px;">—</div>
                     <div style="display:flex;flex-direction:column;gap:6px;">
                         <span style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;">Period End</span>
                         <div style="display:grid;grid-template-columns:1fr 80px;gap:8px;">
-                            <select class="form-input" id="proc-end-month">
+                            <select class="form-input" id="proc-end-month" onchange="if(this.value!==''){this.classList.remove('input-error');document.getElementById('err-proc-end-month').style.display='none';}else{this.classList.add('input-error');document.getElementById('err-proc-end-month').style.display='block';}">
+                                <option value="">Select Month</option>
                                 <option>January</option><option>February</option><option>March</option>
                                 <option>April</option><option>May</option><option>June</option>
                                 <option>July</option><option>August</option><option>September</option>
                                 <option>October</option><option>November</option><option>December</option>
                             </select>
-                            <input type="number" class="form-input" id="proc-end-year" value="<?= htmlspecialchars($saro['fiscal_year']) ?>" min="2020" max="2099">
+                            <input type="number" class="form-input" id="proc-end-year" value="<?= htmlspecialchars($saro['fiscal_year']) ?>" min="2020" max="2099" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-proc-end-year').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-proc-end-year').style.display='none'; }">
                         </div>
+                        <p class="field-error" id="err-proc-end-month">End month is required!</p>
+                        <p class="field-error" id="err-proc-end-year">End year is required!</p>
                     </div>
                 </div>
-                <p class="field-error" id="err-proc-period"></p>
             </div>
             <div>
-                <label class="form-label">Procurement Date</label>
-                <input type="date" class="form-input" id="proc-date">
+                <label class="form-label">Procurement Date <span style="color:#dc2626;">*</span></label>
+                <input type="date" class="form-input" id="proc-date" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-proc-date').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-proc-date').style.display='none'; }">
+                <p class="field-error" id="err-proc-date">Procurement date is required!</p>
             </div>
             <div>
                 <label class="form-label">Remarks</label>
@@ -1209,8 +1244,8 @@ if ($bur < 25) {
         <div style="padding:24px 28px;display:flex;flex-direction:column;gap:16px;max-height:70vh;overflow-y:auto;">
             <input type="hidden" id="edit-proc-id">
             <div>
-                <label class="form-label">Object Code</label>
-                <select class="form-input" id="ep-obj-code">
+                <label class="form-label">Object Code <span style="color:#dc2626;">*</span></label>
+                <select class="form-input" id="ep-obj-code" onchange="if(this.value!==''){this.classList.remove('input-error');document.getElementById('err-ep-obj-code').style.display='none';}else{this.classList.add('input-error');document.getElementById('err-ep-obj-code').style.display='block';}">
                     <option value="">Select object code…</option>
                     <?php foreach ($objectCodes as $obj): ?>
                         <option value="<?= htmlspecialchars($obj['code'],ENT_QUOTES) ?>">
@@ -1218,18 +1253,21 @@ if ($bur < 25) {
                         </option>
                     <?php endforeach; ?>
                 </select>
+                <p class="field-error" id="err-ep-obj-code">Object code is required!</p>
             </div>
             <div>
-                <label class="form-label">Procurement Activity</label>
-                <input type="text" class="form-input" id="ep-activity" placeholder="e.g. Laptop Computer (Core i7)">
+                <label class="form-label">Procurement Activity <span style="color:#dc2626;">*</span></label>
+                <input type="text" class="form-input" id="ep-activity" placeholder="e.g. Laptop Computer (Core i7)" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-ep-activity').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-ep-activity').style.display='none'; }">
+                <p class="field-error" id="err-ep-activity">Activity name is required!</p>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
                 <div>
-                    <label class="form-label">Quantity</label>
-                    <input type="number" class="form-input" id="ep-qty" placeholder="0" min="1">
+                    <label class="form-label">Quantity <span style="color:#dc2626;">*</span></label>
+                    <input type="number" class="form-input" id="ep-qty" placeholder="0" min="1" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-ep-qty').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-ep-qty').style.display='none'; }">
+                    <p class="field-error" id="err-ep-qty">Quantity is required!</p>
                 </div>
                 <div>
-                    <label class="form-label">Unit</label>
+                    <label class="form-label">Unit <span style="font-size:9px;color:#94a3b8;font-weight:500;text-transform:none;">(optional)</span></label>
                     <select class="form-input" id="ep-unit">
                         <option value="">— None —</option>
                         <option>Unit</option><option>Lot</option><option>Set</option>
@@ -1237,43 +1275,51 @@ if ($bur < 25) {
                     </select>
                 </div>
                 <div>
-                    <label class="form-label">Unit Cost (₱)</label>
-                    <input type="number" class="form-input" id="ep-unit-cost" placeholder="0.00" min="0" step="0.01">
+                    <label class="form-label">Unit Cost (₱) <span style="color:#dc2626;">*</span></label>
+                    <input type="number" class="form-input" id="ep-unit-cost" placeholder="0.00" min="0" step="0.01" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-ep-unit-cost').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-ep-unit-cost').style.display='none'; }">
+                    <p class="field-error" id="err-ep-unit-cost">Unit cost is required!</p>
                 </div>
             </div>
             <div>
-                <label class="form-label">Procurement Period</label>
+                <label class="form-label">Procurement Period <span style="color:#dc2626;">*</span></label>
                 <div class="period-pair" style="margin-top:4px;">
                     <div style="display:flex;flex-direction:column;gap:6px;">
                         <span style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;">Period Start</span>
                         <div style="display:grid;grid-template-columns:1fr 80px;gap:8px;">
-                            <select class="form-input" id="ep-start-month">
+                            <select class="form-input" id="ep-start-month" onchange="if(this.value!==''){this.classList.remove('input-error');document.getElementById('err-ep-start-month').style.display='none';}else{this.classList.add('input-error');document.getElementById('err-ep-start-month').style.display='block';}">
+                                <option value="">Select Month</option>
                                 <option>January</option><option>February</option><option>March</option>
                                 <option>April</option><option>May</option><option>June</option>
                                 <option>July</option><option>August</option><option>September</option>
                                 <option>October</option><option>November</option><option>December</option>
                             </select>
-                            <input type="number" class="form-input" id="ep-start-year" min="2020" max="2099">
+                            <input type="number" class="form-input" id="ep-start-year" min="2020" max="2099" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-ep-start-year').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-ep-start-year').style.display='none'; }">
                         </div>
+                        <p class="field-error" id="err-ep-start-month">Start month is required!</p>
+                        <p class="field-error" id="err-ep-start-year">Start year is required!</p>
                     </div>
                     <div class="period-label-sep" style="padding-top:20px;">—</div>
                     <div style="display:flex;flex-direction:column;gap:6px;">
                         <span style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;">Period End</span>
                         <div style="display:grid;grid-template-columns:1fr 80px;gap:8px;">
-                            <select class="form-input" id="ep-end-month">
+                            <select class="form-input" id="ep-end-month" onchange="if(this.value!==''){this.classList.remove('input-error');document.getElementById('err-ep-end-month').style.display='none';}else{this.classList.add('input-error');document.getElementById('err-ep-end-month').style.display='block';}">
+                                <option value="">Select Month</option>
                                 <option>January</option><option>February</option><option>March</option>
                                 <option>April</option><option>May</option><option>June</option>
                                 <option>July</option><option>August</option><option>September</option>
                                 <option>October</option><option>November</option><option>December</option>
                             </select>
-                            <input type="number" class="form-input" id="ep-end-year" min="2020" max="2099">
+                            <input type="number" class="form-input" id="ep-end-year" min="2020" max="2099" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-ep-end-year').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-ep-end-year').style.display='none'; }">
                         </div>
+                        <p class="field-error" id="err-ep-end-month">End month is required!</p>
+                        <p class="field-error" id="err-ep-end-year">End year is required!</p>
                     </div>
                 </div>
             </div>
             <div>
-                <label class="form-label">Procurement Date</label>
-                <input type="date" class="form-input" id="ep-date">
+                <label class="form-label">Procurement Date <span style="color:#dc2626;">*</span></label>
+                <input type="date" class="form-input" id="ep-date" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-ep-date').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-ep-date').style.display='none'; }">
+                <p class="field-error" id="err-ep-date">Procurement date is required!</p>
             </div>
             <div>
                 <label class="form-label">Remarks</label>
@@ -1309,33 +1355,31 @@ if ($bur < 25) {
                 <input type="text" class="form-input" id="edit-saro-no" readonly value="<?= htmlspecialchars($saro['saroNo']) ?>" style="background:#f1f5f9;color:#64748b;cursor:not-allowed;">
             </div>
             <div>
-                <label class="form-label">SARO Title</label>
-                <input type="text" class="form-input" id="edit-saro-title" value="<?= htmlspecialchars($saro['saro_title']) ?>">
+                <label class="form-label">SARO Title <span style="color:#dc2626;">*</span></label>
+                <input type="text" class="form-input" id="edit-saro-title" value="<?= htmlspecialchars($saro['saro_title']) ?>" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-edit-saro-title').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-edit-saro-title').style.display='none'; }">
+                <p class="field-error" id="err-edit-saro-title">SARO title is required!</p>
             </div>
             <div>
-                <label class="form-label">Fiscal Year</label>
-                <input type="number" class="form-input" id="edit-fiscal-year" value="<?= htmlspecialchars($saro['fiscal_year']) ?>" min="2020" max="2099">
+                <label class="form-label">Fiscal Year <span style="color:#dc2626;">*</span></label>
+                <input type="number" class="form-input" id="edit-fiscal-year" value="<?= htmlspecialchars($saro['fiscal_year']) ?>" min="2020" max="2099" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-edit-fiscal-year').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-edit-fiscal-year').style.display='none'; }">
+                <p class="field-error" id="err-edit-fiscal-year">Fiscal year is required!</p>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
                 <div>
-                    <label class="form-label">Date Released</label>
-                    <input type="date" class="form-input" id="edit-date-released" value="<?= htmlspecialchars($saro['date_released'] ?? '') ?>">
+                    <label class="form-label">Date Released <span style="color:#dc2626;">*</span></label>
+                    <input type="date" class="form-input" id="edit-date-released" value="<?= htmlspecialchars($saro['date_released'] ?? '') ?>" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-edit-date-released').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-edit-date-released').style.display='none'; }">
+                    <p class="field-error" id="err-edit-date-released">Date released is required!</p>
                 </div>
                 <div>
-                    <label class="form-label">Valid Until</label>
-                    <input type="date" class="form-input" id="edit-valid-until" value="<?= htmlspecialchars($saro['valid_until'] ?? '') ?>">
+                    <label class="form-label">Valid Until <span style="color:#dc2626;">*</span></label>
+                    <input type="date" class="form-input" id="edit-valid-until" value="<?= htmlspecialchars($saro['valid_until'] ?? '') ?>" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-edit-valid-until').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-edit-valid-until').style.display='none'; }">
+                    <p class="field-error" id="err-edit-valid-until">Valid until is required!</p>
                 </div>
             </div>
             <div>
-                <label class="form-label">Total Budget (₱)</label>
-                <input type="number" class="form-input" id="edit-total-budget" value="<?= htmlspecialchars($saro['total_budget']) ?>" min="0" step="0.01">
-            </div>
-            <div>
-                <label class="form-label">Status</label>
-                <select class="form-input" id="edit-status">
-                    <option value="active" <?= $saro['status'] === 'active' ? 'selected' : '' ?>>Active</option>
-                    <option value="cancelled" <?= $saro['status'] === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
-                </select>
+                <label class="form-label">Total Budget (₱) <span style="color:#dc2626;">*</span></label>
+                <input type="number" class="form-input" id="edit-total-budget" value="<?= htmlspecialchars($saro['total_budget']) ?>" min="0" step="0.01" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-edit-total-budget').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-edit-total-budget').style.display='none'; }">
+                <p class="field-error" id="err-edit-total-budget">Total budget is required!</p>
             </div>
         </div>
         <div class="modal-footer">
@@ -1377,9 +1421,9 @@ if ($bur < 25) {
             <div style="display:grid;grid-template-columns:1fr 120px 1fr 76px 32px;gap:8px;
                         padding:6px 10px;background:#f8fafc;border:1px solid #e8edf5;
                         border-radius:8px 8px 0 0;border-bottom:none;margin-bottom:0;">
-                <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Object Code</p>
+                <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Object Code <span style="color:#dc2626;">*</span></p>
                 <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Projected Cost (₱)</p>
-                <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Expense Item</p>
+                <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Expense Item <span style="color:#dc2626;">*</span></p>
                 <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Travel?</p>
                 <span></span>
             </div>
@@ -1413,12 +1457,14 @@ if ($bur < 25) {
         <div class="modal-body">
             <input type="hidden" id="edit-obj-id">
             <div>
-                <label class="form-label">Object Code</label>
-                <input type="text" class="form-input" id="edit-obj-code">
+                <label class="form-label">Object Code <span style="color:#dc2626;">*</span></label>
+                <input type="text" class="form-input" id="edit-obj-code" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-edit-obj-code').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-edit-obj-code').style.display='none'; }">
+                <p class="field-error" id="err-edit-obj-code">Object code is required!</p>
             </div>
             <div>
-                <label class="form-label">Projected Cost (₱)</label>
-                <input type="number" class="form-input" id="edit-obj-cost" min="0" step="0.01">
+                <label class="form-label">Projected Cost (₱) <span style="color:#dc2626;">*</span></label>
+                <input type="number" class="form-input" id="edit-obj-cost" min="0" step="0.01" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-edit-obj-cost').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-edit-obj-cost').style.display='none'; }">
+                <p class="field-error" id="err-edit-obj-cost">Projected cost is required!</p>
             </div>
             <div>
                 <label class="form-label">Expense Item</label>
@@ -1519,6 +1565,7 @@ if ($bur < 25) {
     const currentSaroId = <?= (int)$saroId ?>;
     const objCodesData  = <?= $objCodesJson ?>;
     const travelDocsCount = <?= count($travelDocs) ?>;
+    const saroValidUntil = "<?= htmlspecialchars($saro['valid_until'] ?? '') ?>";
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
     function getVal(id) { const el = document.getElementById(id); return el ? el.value.trim() : ''; }
@@ -1531,7 +1578,7 @@ if ($bur < 25) {
         const f = document.getElementById(fieldId);
         const e = document.getElementById(errId);
         if (f) { f.classList.toggle('input-error', !!msg); }
-        if (e) { e.textContent = msg; e.style.display = msg ? '' : 'none'; }
+        if (e) { e.textContent = msg; e.style.display = msg ? 'block' : 'none'; }
     }
     function clearErrors(...pairs) { pairs.forEach(([f, e]) => setFieldError(f, e, '')); }
     function postAjax(data) {
@@ -1554,7 +1601,10 @@ if ($bur < 25) {
         document.getElementById('proc-budget-alloc-wrap').style.display = 'none';
         document.getElementById('proc-budget-warning').style.display = 'none';
         clearErrors(['proc-obj-code','err-proc-obj-code'],['proc-activity','err-proc-activity'],
-                    ['proc-qty','err-proc-qty'],['proc-unit-cost','err-proc-unit-cost']);
+                    ['proc-qty','err-proc-qty'],['proc-unit-cost','err-proc-unit-cost'],
+                    ['proc-start-month','err-proc-start-month'],['proc-start-year','err-proc-start-year'],
+                    ['proc-end-month','err-proc-end-month'],['proc-end-year','err-proc-end-year'],
+                    ['proc-date','err-proc-date']);
         document.getElementById('procModal').style.display = 'flex';
     }
     function closeProcModal() { document.getElementById('procModal').style.display = 'none'; }
@@ -1601,23 +1651,53 @@ if ($bur < 25) {
 
     function saveProcActivity() {
         clearErrors(['proc-obj-code','err-proc-obj-code'],['proc-activity','err-proc-activity'],
-                    ['proc-qty','err-proc-qty'],['proc-unit-cost','err-proc-unit-cost']);
+                    ['proc-qty','err-proc-qty'],['proc-unit-cost','err-proc-unit-cost'],
+                    ['proc-start-month','err-proc-start-month'],['proc-start-year','err-proc-start-year'],
+                    ['proc-end-month','err-proc-end-month'],['proc-end-year','err-proc-end-year'],
+                    ['proc-date','err-proc-date']);
         let ok = true;
-        if (!getVal('proc-obj-code'))     { setFieldError('proc-obj-code','err-proc-obj-code','Select an object code.'); ok = false; }
-        if (!getVal('proc-activity'))     { setFieldError('proc-activity','err-proc-activity','Activity name is required.'); ok = false; }
-        if (!getVal('proc-qty') || parseInt(getVal('proc-qty')) < 1) { setFieldError('proc-qty','err-proc-qty','Enter a valid quantity.'); ok = false; }
-        if (getVal('proc-unit-cost') === '' || parseFloat(getVal('proc-unit-cost')) < 0) { setFieldError('proc-unit-cost','err-proc-unit-cost','Enter a valid unit cost.'); ok = false; }
+        
+        if (!getVal('proc-obj-code'))     { setFieldError('proc-obj-code','err-proc-obj-code','Object code is required!'); ok = false; }
+        if (!getVal('proc-activity'))     { setFieldError('proc-activity','err-proc-activity','Activity name is required!'); ok = false; }
+        if (!getVal('proc-qty') || parseInt(getVal('proc-qty')) < 1) { setFieldError('proc-qty','err-proc-qty','Quantity is required!'); ok = false; }
+        if (getVal('proc-unit-cost') === '' || parseFloat(getVal('proc-unit-cost')) < 0) { setFieldError('proc-unit-cost','err-proc-unit-cost','Unit cost is required!'); ok = false; }
+        
+        if (!getVal('proc-start-month')) { setFieldError('proc-start-month','err-proc-start-month','Start month is required!'); ok = false; }
+        if (!getVal('proc-start-year'))  { setFieldError('proc-start-year','err-proc-start-year','Start year is required!'); ok = false; }
+        if (!getVal('proc-end-month'))   { setFieldError('proc-end-month','err-proc-end-month','End month is required!'); ok = false; }
+        if (!getVal('proc-end-year'))    { setFieldError('proc-end-year','err-proc-end-year','End year is required!'); ok = false; }
+        if (!getVal('proc-date'))        { setFieldError('proc-date','err-proc-date','Procurement date is required!'); ok = false; }
+        
         if (!ok) return;
+
+        // Check if procurement date exceeds SARO valid until date
+        if (saroValidUntil) {
+            const pDate = new Date(getVal('proc-date'));
+            const vDate = new Date(saroValidUntil);
+            if (pDate > vDate) {
+                setFieldError('proc-date', 'err-proc-date', 'Date exceeds SARO validity');
+                openWarningModal('The selected Procurement Date cannot exceed the SARO valid until date.');
+                return;
+            }
+        }
+
+        // Frontend Sanitization to prevent XSS
+        const sanitize = (str) => {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML.replace(/<[^>]*>?/gm, '');
+        };
+
         postAjax({
             ajax_action: 'add_procurement', saroId: currentSaroId,
-            objectId: getVal('proc-obj-code'), pro_act: getVal('proc-activity'),
-            quantity: getVal('proc-qty'), unit: document.getElementById('proc-unit').value,
+            objectId: getVal('proc-obj-code'), pro_act: sanitize(getVal('proc-activity')),
+            quantity: getVal('proc-qty'), unit: sanitize(document.getElementById('proc-unit').value),
             unit_cost: getVal('proc-unit-cost'),
-            period_start_month: document.getElementById('proc-start-month').value,
-            period_start_year: getVal('proc-start-year'),
-            period_end_month: document.getElementById('proc-end-month').value,
-            period_end_year: getVal('proc-end-year'),
-            proc_date: getVal('proc-date'), remarks: getVal('proc-remarks'),
+            period_start_month: sanitize(document.getElementById('proc-start-month').value),
+            period_start_year: sanitize(getVal('proc-start-year')),
+            period_end_month: sanitize(document.getElementById('proc-end-month').value),
+            period_end_year: sanitize(getVal('proc-end-year')),
+            proc_date: sanitize(getVal('proc-date')), remarks: sanitize(getVal('proc-remarks')),
             is_travelExpense: document.getElementById('proc-is-travel').value,
         }).then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
           .catch(() => alert('Network error.'));
@@ -1625,6 +1705,11 @@ if ($bur < 25) {
 
     // ─── Edit Activity Modal ──────────────────────────────────────────────────
     function openEditProcModal(procId, objCode, activity, qty, unit, unitCost, startMonth, startYear, endMonth, endYear, date, remarks) {
+        clearErrors(['ep-obj-code','err-ep-obj-code'],['ep-activity','err-ep-activity'],
+                    ['ep-qty','err-ep-qty'],['ep-unit-cost','err-ep-unit-cost'],
+                    ['ep-start-month','err-ep-start-month'],['ep-start-year','err-ep-start-year'],
+                    ['ep-end-month','err-ep-end-month'],['ep-end-year','err-ep-end-year'],
+                    ['ep-date','err-ep-date']);
         setVal('edit-proc-id', procId);
         setOpt('ep-obj-code', objCode);
         setVal('ep-activity', activity);
@@ -1646,33 +1731,104 @@ if ($bur < 25) {
 
     function saveEditProc() {
         const procId = getVal('edit-proc-id'); if (!procId) return;
+
+        clearErrors(['ep-obj-code','err-ep-obj-code'],['ep-activity','err-ep-activity'],
+                    ['ep-qty','err-ep-qty'],['ep-unit-cost','err-ep-unit-cost'],
+                    ['ep-start-month','err-ep-start-month'],['ep-start-year','err-ep-start-year'],
+                    ['ep-end-month','err-ep-end-month'],['ep-end-year','err-ep-end-year'],
+                    ['ep-date','err-ep-date']);
+        let ok = true;
+        
+        if (!getVal('ep-obj-code'))     { setFieldError('ep-obj-code','err-ep-obj-code','Object code is required!'); ok = false; }
+        if (!getVal('ep-activity'))     { setFieldError('ep-activity','err-ep-activity','Activity name is required!'); ok = false; }
+        if (!getVal('ep-qty') || parseInt(getVal('ep-qty')) < 1) { setFieldError('ep-qty','err-ep-qty','Quantity is required!'); ok = false; }
+        if (getVal('ep-unit-cost') === '' || parseFloat(getVal('ep-unit-cost')) < 0) { setFieldError('ep-unit-cost','err-ep-unit-cost','Unit cost is required!'); ok = false; }
+        
+        if (!getVal('ep-start-month')) { setFieldError('ep-start-month','err-ep-start-month','Start month is required!'); ok = false; }
+        if (!getVal('ep-start-year'))  { setFieldError('ep-start-year','err-ep-start-year','Start year is required!'); ok = false; }
+        if (!getVal('ep-end-month'))   { setFieldError('ep-end-month','err-ep-end-month','End month is required!'); ok = false; }
+        if (!getVal('ep-end-year'))    { setFieldError('ep-end-year','err-ep-end-year','End year is required!'); ok = false; }
+        if (!getVal('ep-date'))        { setFieldError('ep-date','err-ep-date','Procurement date is required!'); ok = false; }
+        
+        if (!ok) return;
+
+        // Check if procurement date exceeds SARO valid until date
+        if (saroValidUntil) {
+            const epDate = new Date(getVal('ep-date'));
+            const evDate = new Date(saroValidUntil);
+            if (epDate > evDate) {
+                setFieldError('ep-date', 'err-ep-date', 'Date exceeds SARO validity');
+                openWarningModal('The selected Procurement Date cannot exceed the SARO valid until date.');
+                return;
+            }
+        }
+
+        // Frontend Sanitization to prevent XSS
+        const sanitize = (str) => {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML.replace(/<[^>]*>?/gm, '');
+        };
+
         postAjax({
             ajax_action: 'edit_procurement', saroId: currentSaroId, procurementId: procId,
-            pro_act: getVal('ep-activity'), quantity: getVal('ep-qty'),
-            unit: document.getElementById('ep-unit').value, unit_cost: getVal('ep-unit-cost'),
-            period_start_month: document.getElementById('ep-start-month').value,
-            period_start_year: getVal('ep-start-year'),
-            period_end_month: document.getElementById('ep-end-month').value,
-            period_end_year: getVal('ep-end-year'),
-            proc_date: getVal('ep-date'), remarks: getVal('ep-remarks'),
+            pro_act: sanitize(getVal('ep-activity')), quantity: getVal('ep-qty'),
+            unit: sanitize(document.getElementById('ep-unit').value), unit_cost: getVal('ep-unit-cost'),
+            period_start_month: sanitize(document.getElementById('ep-start-month').value),
+            period_start_year: sanitize(getVal('ep-start-year')),
+            period_end_month: sanitize(document.getElementById('ep-end-month').value),
+            period_end_year: sanitize(getVal('ep-end-year')),
+            proc_date: sanitize(getVal('ep-date')), remarks: sanitize(getVal('ep-remarks')),
         }).then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
           .catch(() => alert('Network error.'));
     }
 
     // ─── Edit SARO Modal ──────────────────────────────────────────────────────
-    function openEditSaroModal() { document.getElementById('editSaroModal').classList.add('open'); }
+    function openEditSaroModal() { 
+        clearErrors(
+            ['edit-saro-title', 'err-edit-saro-title'],
+            ['edit-fiscal-year', 'err-edit-fiscal-year'],
+            ['edit-date-released', 'err-edit-date-released'],
+            ['edit-valid-until', 'err-edit-valid-until'],
+            ['edit-total-budget', 'err-edit-total-budget']
+        );
+        document.getElementById('editSaroModal').classList.add('open'); 
+    }
     function closeEditSaroModal() { document.getElementById('editSaroModal').classList.remove('open'); }
     document.getElementById('editSaroModal').addEventListener('click', function(e) {
         if (e.target === this) closeEditSaroModal();
     });
 
     function saveEditSaro() {
+        clearErrors(
+            ['edit-saro-title', 'err-edit-saro-title'],
+            ['edit-fiscal-year', 'err-edit-fiscal-year'],
+            ['edit-date-released', 'err-edit-date-released'],
+            ['edit-valid-until', 'err-edit-valid-until'],
+            ['edit-total-budget', 'err-edit-total-budget']
+        );
+        
+        let ok = true;
+        if (!getVal('edit-saro-title')) { setFieldError('edit-saro-title', 'err-edit-saro-title', 'SARO title is required!'); ok = false; }
+        if (!getVal('edit-fiscal-year')) { setFieldError('edit-fiscal-year', 'err-edit-fiscal-year', 'Fiscal year is required!'); ok = false; }
+        if (!getVal('edit-date-released')) { setFieldError('edit-date-released', 'err-edit-date-released', 'Date released is required!'); ok = false; }
+        if (!getVal('edit-valid-until')) { setFieldError('edit-valid-until', 'err-edit-valid-until', 'Valid until is required!'); ok = false; }
+        if (!getVal('edit-total-budget')) { setFieldError('edit-total-budget', 'err-edit-total-budget', 'Total budget is required!'); ok = false; }
+        
+        if (!ok) return;
+
+        // Frontend Sanitization to prevent XSS
+        const sanitize = (str) => {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML.replace(/<[^>]*>?/gm, '');
+        };
+
         postAjax({
             ajax_action: 'edit_saro', saroId: currentSaroId,
-            saro_title: getVal('edit-saro-title'), fiscal_year: getVal('edit-fiscal-year'),
-            date_released: getVal('edit-date-released'), valid_until: getVal('edit-valid-until'),
-            total_budget: getVal('edit-total-budget'),
-            status: document.getElementById('edit-status').value,
+            saro_title: sanitize(getVal('edit-saro-title')), fiscal_year: sanitize(getVal('edit-fiscal-year')),
+            date_released: sanitize(getVal('edit-date-released')), valid_until: sanitize(getVal('edit-valid-until')),
+            total_budget: sanitize(getVal('edit-total-budget')),
         }).then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
           .catch(() => alert('Network error.'));
     }
@@ -1694,21 +1850,32 @@ if ($bur < 25) {
         const hint = document.getElementById('objViewEmptyHint');
         if (hint) hint.style.display = 'none';
         const row = document.createElement('div');
-        row.style.cssText = 'background:#fff;border-bottom:1px solid #f1f5f9;transition:background 0.15s ease;';
+        row.className = 'obj-row';
+        row.style.cssText = 'background:#fff;border-bottom:1px solid #f1f5f9;transition:background 0.15s ease;padding:10px;';
         row.onmouseenter = () => row.style.background = '#f5f8ff';
         row.onmouseleave = () => row.style.background = '#fff';
         const inp = 'width:100%;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12px;font-family:\'Poppins\',sans-serif;font-weight:500;color:#0f172a;background:#f8fafc;outline:none;transition:all 0.2s ease;';
         const foc = "onfocus=\"this.style.borderColor='#3b82f6';this.style.background='#fff';this.style.boxShadow='0 0 0 3px rgba(59,130,246,0.1)'\"";
-        const blr = "onblur=\"this.style.borderColor='#e2e8f0';this.style.background='#f8fafc';this.style.boxShadow='none'\"";
-        row.innerHTML = `<div style="display:grid;grid-template-columns:1fr 120px 1fr auto 32px;gap:8px;align-items:center;padding:10px;">
-            <input type="text" placeholder="e.g. 5-02-03-070" style="${inp}" ${foc} ${blr}>
-            <input type="number" placeholder="0.00" min="0" step="0.01" style="${inp}" ${foc} ${blr}>
-            <input type="text" placeholder="e.g. ICT Equipment" style="${inp}" ${foc} ${blr}>
-            <label style="display:flex;align-items:center;gap:5px;font-size:10px;font-weight:600;color:#64748b;white-space:nowrap;cursor:pointer;">
-                <input type="checkbox" style="width:13px;height:13px;accent-color:#3b82f6;cursor:pointer;"> Travel
+        const blr = "onblur=\"if(!this.classList.contains('input-error')){this.style.borderColor='#e2e8f0';this.style.background='#f8fafc';this.style.boxShadow='none'}\"";
+        const onInpCode = "oninput=\"if(this.value.trim()!==''){this.classList.remove('input-error');this.nextElementSibling.style.display='none';this.style.borderColor='#3b82f6';this.style.boxShadow='0 0 0 3px rgba(59,130,246,0.1)';}else{this.classList.add('input-error');this.nextElementSibling.style.display='block';this.style.borderColor='#dc2626';this.style.boxShadow='0 0 0 3px rgba(220,38,38,0.1)';}\"";
+        
+        row.innerHTML = `<div style="display:grid;grid-template-columns:1fr 120px 1fr auto 32px;gap:8px;align-items:start;">
+            <div>
+                <input type="text" class="obj-code-inp" placeholder="e.g. 5-02-03-070" style="${inp}" ${foc} ${blr} ${onInpCode}>
+                <p class="field-error" style="margin-top:4px;display:none;">Object code is required!</p>
+            </div>
+            <div>
+                <input type="number" class="obj-cost-inp" placeholder="0.00" min="0" step="0.01" style="${inp}" ${foc} ${blr}>
+            </div>
+            <div>
+                <input type="text" class="obj-exp-inp" placeholder="e.g. ICT Equipment" style="${inp}" ${foc} ${blr} ${onInpCode.replace('Object code', 'Expense item')}>
+                <p class="field-error" style="margin-top:4px;display:none;">Expense item is required!</p>
+            </div>
+            <label style="display:flex;align-items:center;gap:5px;font-size:10px;font-weight:600;color:#64748b;white-space:nowrap;cursor:pointer;padding-top:7px;">
+                <input type="checkbox" class="obj-trv-inp" style="width:13px;height:13px;accent-color:#3b82f6;cursor:pointer;"> Travel
             </label>
             <button type="button" onclick="removeObjRowView(this)" title="Remove row"
-                    style="width:28px;height:28px;border-radius:6px;border:1px solid transparent;background:transparent;cursor:pointer;color:#94a3b8;display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;flex-shrink:0;"
+                    style="margin-top:2px;width:28px;height:28px;border-radius:6px;border:1px solid transparent;background:transparent;cursor:pointer;color:#94a3b8;display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;flex-shrink:0;"
                     onmouseenter="this.style.background='#fee2e2';this.style.borderColor='#fecaca';this.style.color='#dc2626'"
                     onmouseleave="this.style.background='transparent';this.style.borderColor='transparent';this.style.color='#94a3b8'">
                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1717,12 +1884,12 @@ if ($bur < 25) {
             </button>
         </div>`;
         list.appendChild(row);
-        row.querySelector('input[type=text]').focus();
+        row.querySelector('.obj-code-inp').focus();
     }
 
     function removeObjRowView(btn) {
         const list = document.getElementById('objCodeListView');
-        btn.closest('div[style]').parentElement.remove();
+        btn.closest('.obj-row').remove();
         if (list.children.length === 0) {
             const hint = document.getElementById('objViewEmptyHint');
             if (hint) hint.style.display = '';
@@ -1730,15 +1897,53 @@ if ($bur < 25) {
     }
 
     function saveObjCodes() {
-        const rows = document.querySelectorAll('#objCodeListView > div');
+        const rows = document.querySelectorAll('#objCodeListView > div.obj-row');
         const items = [];
+        let ok = true;
+        
         rows.forEach(row => {
-            const inps = row.querySelectorAll('input');
-            const code = inps[0]?.value.trim();
-            if (!code) return;
-            items.push({ code, cost: parseFloat(inps[1]?.value) || 0, expense_item: inps[2]?.value.trim() || '', is_travel: inps[3]?.checked ? 1 : 0 });
+            const codeInp = row.querySelector('.obj-code-inp');
+            const costInp = row.querySelector('.obj-cost-inp');
+            const expInp  = row.querySelector('.obj-exp-inp');
+            const trvInp  = row.querySelector('.obj-trv-inp');
+            
+            const code = codeInp.value.trim();
+            const exp = expInp.value.trim();
+            
+            if (code === '') {
+                codeInp.classList.add('input-error');
+                codeInp.style.borderColor = '#dc2626';
+                codeInp.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.1)';
+                codeInp.nextElementSibling.style.display = 'block';
+                ok = false;
+            }
+            if (exp === '') {
+                expInp.classList.add('input-error');
+                expInp.style.borderColor = '#dc2626';
+                expInp.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.1)';
+                expInp.nextElementSibling.style.display = 'block';
+                ok = false;
+            }
+            
+            if (code !== '' && exp !== '') {
+                items.push({ code, cost: parseFloat(costInp.value) || 0, expense_item: exp, is_travel: trvInp.checked ? 1 : 0 });
+            }
         });
-        if (!items.length) { alert('Add at least one object code row.'); return; }
+        
+        if (rows.length === 0) { alert('Add at least one object code row.'); return; }
+        if (!ok) return;
+
+        // Frontend Sanitization to prevent XSS
+        const sanitize = (str) => {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML.replace(/<[^>]*>?/gm, '');
+        };
+        items.forEach(it => {
+            it.code = sanitize(it.code);
+            it.expense_item = sanitize(it.expense_item);
+        });
+
         postAjax({ ajax_action: 'add_object_codes', saroId: currentSaroId, items: JSON.stringify(items) })
             .then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
             .catch(() => alert('Network error.'));
@@ -1746,6 +1951,7 @@ if ($bur < 25) {
 
     // ─── Edit Object Code Modal ───────────────────────────────────────────────
     function openEditObjModal(objectId, code, cost, item) {
+        clearErrors(['edit-obj-code','err-edit-obj-code'], ['edit-obj-cost','err-edit-obj-cost']);
         setVal('edit-obj-id', objectId);
         setVal('edit-obj-code', code);
         setVal('edit-obj-cost', cost);
@@ -1760,10 +1966,25 @@ if ($bur < 25) {
 
     function saveEditObj() {
         const objectId = getVal('edit-obj-id'); if (!objectId) return;
+        
+        clearErrors(['edit-obj-code','err-edit-obj-code'], ['edit-obj-cost','err-edit-obj-cost']);
+        let ok = true;
+        if (!getVal('edit-obj-code')) { setFieldError('edit-obj-code', 'err-edit-obj-code', 'Object code is required!'); ok = false; }
+        if (!getVal('edit-obj-cost')) { setFieldError('edit-obj-cost', 'err-edit-obj-cost', 'Projected cost is required!'); ok = false; }
+        
+        if (!ok) return;
+
+        // Frontend Sanitization to prevent XSS
+        const sanitize = (str) => {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML.replace(/<[^>]*>?/gm, '');
+        };
+
         postAjax({
             ajax_action: 'edit_object_code', saroId: currentSaroId, objectId,
-            code: getVal('edit-obj-code'), projected_cost: getVal('edit-obj-cost'),
-            expense_item: getVal('edit-obj-expense-item'),
+            code: sanitize(getVal('edit-obj-code')), projected_cost: getVal('edit-obj-cost'),
+            expense_item: sanitize(getVal('edit-obj-expense-item')),
         }).then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
           .catch(() => alert('Network error.'));
     }
@@ -1821,6 +2042,55 @@ if ($bur < 25) {
             .then(d => { if (d.success) location.reload(); else alert(d.error || 'Delete failed.'); })
             .catch(() => alert('Network error.'));
     }
+
+    // Date Warning Modal
+    function openWarningModal(msg) {
+        document.getElementById('warning-msg').textContent = msg;
+        document.getElementById('warningModal').classList.add('open');
+    }
+    function closeWarningModal() {
+        document.getElementById('warningModal').classList.remove('open');
+    }
+    document.getElementById('warningModal').addEventListener('click', function(e) {
+        if (e.target === this) closeWarningModal();
+    });
+
+    // Initialize Calendar
+    document.addEventListener('DOMContentLoaded', function() {
+        const calendarEl = document.getElementById('calendar');
+        if (!calendarEl) return;
+        const calendar = new FullCalendar.Calendar(calendarEl, {
+            initialView: 'dayGridMonth',
+            headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,dayGridWeek' },
+            events: [
+                <?php if (!empty($saro['valid_until'])): ?>
+                { title: 'SARO Expires', start: '<?= date('Y-m-d', strtotime($saro['valid_until'])) ?>', color: '#ef4444', allDay: true },
+                <?php endif; ?>
+                <?php foreach ($procurements as $p): ?>
+                <?php if (!empty($p['proc_date'])): ?>
+                { title: <?= json_encode($p['activity']) ?>, start: '<?= date('Y-m-d', strtotime($p['proc_date'])) ?>', color: '#3b82f6', allDay: true },
+                <?php endif; ?>
+                <?php endforeach; ?>
+            ]
+        });
+        calendar.render();
+    });
 </script>
+
+<!-- Generic Warning Modal for Validation -->
+<div class="modal-overlay" id="warningModal" style="z-index: 10000;">
+    <div class="modal-card" style="max-width:400px;">
+        <div style="padding:24px;text-align:center;">
+            <div style="width:48px;height:48px;border-radius:50%;background:#fef2f2;
+                        display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">
+                <svg width="24" height="24" fill="none" stroke="#ef4444" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            </div>
+            <h3 style="font-size:18px;font-weight:800;color:#0f172a;margin-bottom:10px;">Validation Error</h3>
+            <p id="warning-msg" style="font-size:13px;color:#475569;line-height:1.6;margin-bottom:24px;"></p>
+            <button class="btn-submit" onclick="closeWarningModal()">Understood</button>
+        </div>
+    </div>
+</div>
+
 </body>
 </html>

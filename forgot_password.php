@@ -40,8 +40,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $error = 'This account is inactive. Contact your administrator directly.';
                     $foundUser = null;
                 } elseif ((int)$foundUser['roleId'] === 1) {
-                    // ── Super Admin: send email token reset ───────────────
-                    // Remove any existing unused tokens for this user
+                    // Check for 30-minute rate limit
+                    $limitCheck = $conn->prepare("SELECT 1 FROM password_resets WHERE userId = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 30 MINUTE) LIMIT 1");
+                    $limitCheck->execute([$foundUser['userId']]);
+                    if ($limitCheck->fetch()) {
+                        $error = 'You have recently requested a password reset. Please wait 30 minutes before trying again.';
+                        $foundUser = null;
+                    } else {
+                        // ── Super Admin: send email token reset ───────────────
+                        // Remove any existing unused tokens for this user
                     $conn->prepare("DELETE FROM password_resets WHERE userId = ? AND used_at IS NULL")
                          ->execute([$foundUser['userId']]);
 
@@ -64,9 +71,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $error = 'Failed to send the reset email. Please check the mail configuration in class/mail_config.php and try again.';
                     }
                     $foundUser = null; // don't expose user data in HTML
+                    }
                 } else {
                     // ── Regular user: admin-approval flow ────────────────
-                    $step = 'confirm';
+                    // Check for 30-minute rate limit before allowing them to proceed to step 2
+                    $limitCheck = $conn->prepare("SELECT 1 FROM password_requests WHERE userId = ? AND requested_at >= DATE_SUB(NOW(), INTERVAL 30 MINUTE) LIMIT 1");
+                    $limitCheck->execute([$foundUser['userId']]);
+                    if ($limitCheck->fetch()) {
+                        $error = 'You have recently requested a password reset. Please wait 30 minutes before trying again.';
+                        $foundUser = null;
+                    } else {
+                        $step = 'confirm';
+                    }
                 }
             } catch (PDOException $e) {
                 $error = 'Database error. Please try again later.';
@@ -97,9 +113,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $db   = new Database();
                 $conn = $db->connect();
 
+                $timeCheck = $conn->prepare("SELECT 1 FROM password_requests WHERE userId = ? AND requested_at >= DATE_SUB(NOW(), INTERVAL 30 MINUTE) LIMIT 1");
+                $timeCheck->execute([$userId]);
+
                 $dup = $conn->prepare("SELECT requestId FROM password_requests WHERE userId = ? AND status = 'pending' LIMIT 1");
                 $dup->execute([$userId]);
-                if ($dup->fetch()) {
+
+                if ($timeCheck->fetch()) {
+                    $error = 'You have recently requested a password reset. Please wait 30 minutes before trying again.';
+                    $step  = 'confirm';
+                    $stmt  = $conn->prepare("SELECT userId, first_name, last_name, email, username FROM user WHERE userId = ? LIMIT 1");
+                    $stmt->execute([$userId]);
+                    $foundUser = $stmt->fetch(PDO::FETCH_ASSOC);
+                } elseif ($dup->fetch()) {
                     $error = 'You already have a pending password reset request. Please wait for administrator approval.';
                     $step  = 'confirm';
                     $stmt  = $conn->prepare("SELECT userId, first_name, last_name, email, username FROM user WHERE userId = ? LIMIT 1");

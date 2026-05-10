@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../class/saro.php';
 require_once __DIR__ . '/../class/notification.php';
@@ -14,15 +14,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $action = $_POST['action'];
 
     if ($action === 'add') {
-        $saroNo  = trim($_POST['saro_no']       ?? '');
-        $title   = trim($_POST['saro_title']    ?? '');
-        $year    = trim($_POST['fiscal_year']   ?? '');
-        $budget  = $_POST['total_budget']       ?? 0;
-        $codes   = json_decode($_POST['object_codes'] ?? '[]', true) ?: [];
-        $dateRel = trim($_POST['date_released'] ?? '') ?: null;
-        $validUntil = trim($_POST['valid_until'] ?? '') ?: null;
-        if (!$saroNo || !$title || !$year || !$budget) {
-            echo json_encode(['success' => false, 'error' => 'All fields are required.']);
+        $saroNo  = strip_tags(trim($_POST['saro_no']       ?? ''));
+        $title   = strip_tags(trim($_POST['saro_title']    ?? ''));
+        $year    = strip_tags(trim($_POST['fiscal_year']   ?? ''));
+        $budget  = strip_tags(trim($_POST['total_budget']  ?? ''));
+        $rawCodes = json_decode($_POST['object_codes'] ?? '[]', true) ?: [];
+        $codes = [];
+        foreach ($rawCodes as $c) {
+            $codes[] = [
+                'code' => strip_tags(trim($c['code'] ?? '')),
+                'item' => strip_tags(trim($c['item'] ?? '')),
+                'cost' => (float)($c['cost'] ?? 0),
+                'is_travel' => (int)($c['is_travel'] ?? 0)
+            ];
+        }
+        $dateRel = strip_tags(trim($_POST['date_released'] ?? '')) ?: null;
+        $validUntil = strip_tags(trim($_POST['valid_until'] ?? '')) ?: null;
+        if (!$saroNo || !$title || !$year || !$budget || !$dateRel || !$validUntil) {
+            echo json_encode(['success' => false, 'error' => 'All required fields must be filled.']);
             exit;
         }
         echo json_encode($saroObj->createSaro($userId, $saroNo, $title, $year, $budget, $codes, $dateRel, $validUntil));
@@ -31,15 +40,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     if ($action === 'edit') {
         $id     = (int)($_POST['saro_id']     ?? 0);
-        $saroNo = trim($_POST['saro_no']      ?? '');
-        $title  = trim($_POST['saro_title']   ?? '');
-        $year   = trim($_POST['fiscal_year']  ?? '');
-        $budget = $_POST['total_budget']      ?? 0;
-        $status = $_POST['status']            ?? 'active';
-        $dateRel = trim($_POST['date_released'] ?? '') ?: null;
-        $validUntil = trim($_POST['valid_until'] ?? '') ?: null;
-        if (!$id || !$saroNo || !$title || !$year) {
-            echo json_encode(['success' => false, 'error' => 'All fields are required.']);
+        $saroNo = strip_tags(trim($_POST['saro_no']      ?? ''));
+        $title  = strip_tags(trim($_POST['saro_title']   ?? ''));
+        $year   = strip_tags(trim($_POST['fiscal_year']  ?? ''));
+        $budget = strip_tags(trim($_POST['total_budget'] ?? ''));
+        $status = strip_tags(trim($_POST['status']       ?? 'active'));
+        $dateRel = strip_tags(trim($_POST['date_released'] ?? '')) ?: null;
+        $validUntil = strip_tags(trim($_POST['valid_until'] ?? '')) ?: null;
+        if (!$id || !$saroNo || !$title || !$year || !$budget || !$dateRel || !$validUntil) {
+            echo json_encode(['success' => false, 'error' => 'All required fields must be filled.']);
             exit;
         }
         if (!$saroObj->isOwner($id, $userId)) {
@@ -669,34 +678,40 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
             </p>
 
             <div>
-                <label class="form-label">SARO Number</label>
+                <label class="form-label">SARO Number <span style="color:#dc2626;">*</span></label>
                 <input type="text" class="form-input" id="add-saro-no" placeholder="e.g. SARO-ROIX-2026-006">
+                <p class="saro-err-msg" id="err-add-saro-no" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">SARO number is required!</p>
             </div>
 
             <div>
-                <label class="form-label">SARO Title</label>
+                <label class="form-label">SARO Title <span style="color:#dc2626;">*</span></label>
                 <input type="text" class="form-input" id="add-saro-title" placeholder="e.g. ICT Equipment Procurement…">
+                <p class="saro-err-msg" id="err-add-saro-title" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">SARO title is required!</p>
             </div>
 
             <div>
-                <label class="form-label">Fiscal Year</label>
+                <label class="form-label">Fiscal Year <span style="color:#dc2626;">*</span></label>
                 <input type="number" class="form-input" id="add-fiscal-year" placeholder="e.g. 2026" min="2020" max="2099">
+                <p class="saro-err-msg" id="err-add-fiscal-year" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Fiscal year is required!</p>
             </div>
 
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
                 <div>
-                    <label class="form-label">Date Released</label>
+                    <label class="form-label">Date Released <span style="color:#dc2626;">*</span></label>
                     <input type="date" class="form-input" id="add-date-released">
+                    <p class="saro-err-msg" id="err-add-date-released" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Date released is required!</p>
                 </div>
                 <div>
-                    <label class="form-label">Valid Until</label>
+                    <label class="form-label">Valid Until <span style="color:#dc2626;">*</span></label>
                     <input type="date" class="form-input" id="add-valid-until">
+                    <p class="saro-err-msg" id="err-add-valid-until" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Valid until is required!</p>
                 </div>
             </div>
 
             <div>
-                <label class="form-label">Total Budget (₱)</label>
+                <label class="form-label">Total Budget (₱) <span style="color:#dc2626;">*</span></label>
                 <input type="number" class="form-input" id="add-total-budget" placeholder="0.00" min="0" step="0.01">
+                <p class="saro-err-msg" id="err-add-total-budget" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Total budget is required!</p>
             </div>
 
             <!-- Object Codes -->
@@ -719,9 +734,9 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr 56px 32px;gap:8px;
                             padding:6px 10px;background:#f8fafc;border:1px solid #e8edf5;
                             border-radius:8px 8px 0 0;border-bottom:none;">
-                    <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Object Code</p>
-                    <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Expense Items</p>
-                    <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Projected Cost (₱)</p>
+                    <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Object Code <span style="color:#dc2626;">*</span></p>
+                    <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Expense Items <span style="font-size:8px;text-transform:none;color:#cbd5e1;">(opt)</span></p>
+                    <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Projected Cost <span style="color:#dc2626;">*</span></p>
                     <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;text-align:center;">Travel?</p>
                     <span></span>
                 </div>
@@ -773,29 +788,35 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
         <div style="padding:24px 28px;display:flex;flex-direction:column;gap:18px;max-height:72vh;overflow-y:auto;">
             <input type="hidden" id="edit-saro-id">
             <div>
-                <label class="form-label">SARO Number</label>
+                <label class="form-label">SARO Number <span style="color:#dc2626;">*</span></label>
                 <input type="text" class="form-input" id="edit-saro-no">
+                <p class="saro-err-msg" id="err-edit-saro-no" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">SARO number is required!</p>
             </div>
             <div>
-                <label class="form-label">SARO Title</label>
+                <label class="form-label">SARO Title <span style="color:#dc2626;">*</span></label>
                 <input type="text" class="form-input" id="edit-saro-title">
+                <p class="saro-err-msg" id="err-edit-saro-title" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">SARO title is required!</p>
             </div>
             <div>
-                <label class="form-label">Fiscal Year</label>
+                <label class="form-label">Fiscal Year <span style="color:#dc2626;">*</span></label>
                 <input type="number" class="form-input" id="edit-fiscal-year" min="2020" max="2099">
+                <p class="saro-err-msg" id="err-edit-fiscal-year" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Fiscal year is required!</p>
             </div>
             <div>
-                <label class="form-label">Total Budget (₱)</label>
+                <label class="form-label">Total Budget (₱) <span style="color:#dc2626;">*</span></label>
                 <input type="number" class="form-input" id="edit-total-budget" min="0" step="0.01">
+                <p class="saro-err-msg" id="err-edit-total-budget" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Total budget is required!</p>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
                 <div>
-                    <label class="form-label">Date Released</label>
+                    <label class="form-label">Date Released <span style="color:#dc2626;">*</span></label>
                     <input type="date" class="form-input" id="edit-date-released">
+                    <p class="saro-err-msg" id="err-edit-date-released" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Date released is required!</p>
                 </div>
                 <div>
-                    <label class="form-label">Valid Until</label>
+                    <label class="form-label">Valid Until <span style="color:#dc2626;">*</span></label>
                     <input type="date" class="form-input" id="edit-valid-until">
+                    <p class="saro-err-msg" id="err-edit-valid-until" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Valid until is required!</p>
                 </div>
             </div>
             <div>
@@ -971,22 +992,72 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
     }
 
     function submitAddSaro() {
+        let valid = true;
+        ['add-saro-no', 'add-saro-title', 'add-fiscal-year', 'add-total-budget', 'add-date-released', 'add-valid-until'].forEach(id => {
+            const el = document.getElementById(id);
+            const errEl = document.getElementById('err-' + id);
+            if (!el.value.trim()) {
+                el.style.borderColor = '#ef4444';
+                if (errEl) errEl.style.display = 'block';
+                valid = false;
+            } else {
+                el.style.borderColor = '';
+                if (errEl) errEl.style.display = 'none';
+            }
+        });
+
+        const saroNo = document.getElementById('add-saro-no').value.trim();
+        const title = document.getElementById('add-saro-title').value.trim();
+        const year = document.getElementById('add-fiscal-year').value.trim();
+        const budget = document.getElementById('add-total-budget').value;
+        const released = document.getElementById('add-date-released').value;
+        const validUntil = document.getElementById('add-valid-until').value;
+
         const codes = [];
+        let validCodes = true;
         document.querySelectorAll('#objCodeList > div').forEach(row => {
             const inputs = row.querySelectorAll('input[type=text], input[type=number]');
             const cb     = row.querySelector('.obj-travel-cb');
-            if (inputs[0] && inputs[0].value.trim()) {
-                codes.push({ code: inputs[0].value.trim(), item: inputs[1] ? inputs[1].value.trim() : '', cost: inputs[2] ? inputs[2].value : 0, is_travel: cb && cb.checked ? 1 : 0 });
+            if (inputs[0]) {
+                const codeVal = inputs[0].value.trim().replace(/<\/?[^>]+(>|$)/g, "");
+                const itemVal = inputs[1] ? inputs[1].value.trim().replace(/<\/?[^>]+(>|$)/g, "") : '';
+                const costVal = inputs[2] ? inputs[2].value : 0;
+                
+                if (codeVal || costVal || itemVal) {
+                    if (!codeVal) { 
+                        inputs[0].style.borderColor = '#ef4444'; 
+                        const err = inputs[0].nextElementSibling; if (err && err.classList.contains('saro-err-msg')) err.style.display = 'block';
+                        validCodes = false; 
+                    } else { 
+                        inputs[0].style.borderColor = ''; 
+                        const err = inputs[0].nextElementSibling; if (err && err.classList.contains('saro-err-msg')) err.style.display = 'none';
+                    }
+                    if (!costVal && inputs[2]) { 
+                        inputs[2].style.borderColor = '#ef4444'; 
+                        const err = inputs[2].nextElementSibling; if (err && err.classList.contains('saro-err-msg')) err.style.display = 'block';
+                        validCodes = false; 
+                    } else if (inputs[2]) { 
+                        inputs[2].style.borderColor = ''; 
+                        const err = inputs[2].nextElementSibling; if (err && err.classList.contains('saro-err-msg')) err.style.display = 'none';
+                    }
+                    
+                    if (codeVal && costVal) {
+                        codes.push({ code: codeVal, item: itemVal, cost: costVal, is_travel: cb && cb.checked ? 1 : 0 });
+                    }
+                }
             }
         });
+
+        if (!valid || !validCodes) return;
+
         const fd = new FormData();
         fd.append('action',         'add');
-        fd.append('saro_no',        document.getElementById('add-saro-no').value.trim());
-        fd.append('saro_title',     document.getElementById('add-saro-title').value.trim());
-        fd.append('fiscal_year',    document.getElementById('add-fiscal-year').value.trim());
-        fd.append('total_budget',   document.getElementById('add-total-budget').value);
-        fd.append('date_released',  document.getElementById('add-date-released').value);
-        fd.append('valid_until',    document.getElementById('add-valid-until').value);
+        fd.append('saro_no',        saroNo.replace(/<\/?[^>]+(>|$)/g, ""));
+        fd.append('saro_title',     title.replace(/<\/?[^>]+(>|$)/g, ""));
+        fd.append('fiscal_year',    year.replace(/<\/?[^>]+(>|$)/g, ""));
+        fd.append('total_budget',   budget);
+        fd.append('date_released',  released);
+        fd.append('valid_until',    validUntil);
         fd.append('object_codes',   JSON.stringify(codes));
         fetch('data_entry.php', { method: 'POST', body: fd })
             .then(r => r.json())
@@ -994,16 +1065,40 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
     }
 
     function submitEditSaro() {
+        let valid = true;
+        ['edit-saro-no', 'edit-saro-title', 'edit-fiscal-year', 'edit-total-budget', 'edit-date-released', 'edit-valid-until'].forEach(id => {
+            const el = document.getElementById(id);
+            const errEl = document.getElementById('err-' + id);
+            if (!el.value.trim()) {
+                el.style.borderColor = '#ef4444';
+                if (errEl) errEl.style.display = 'block';
+                valid = false;
+            } else {
+                el.style.borderColor = '';
+                if (errEl) errEl.style.display = 'none';
+            }
+        });
+
+        if (!valid) return;
+
+        const id = document.getElementById('edit-saro-id').value;
+        const saroNo = document.getElementById('edit-saro-no').value.trim();
+        const title = document.getElementById('edit-saro-title').value.trim();
+        const year = document.getElementById('edit-fiscal-year').value.trim();
+        const budget = document.getElementById('edit-total-budget').value;
+        const released = document.getElementById('edit-date-released').value;
+        const validUntil = document.getElementById('edit-valid-until').value;
+
         const fd = new FormData();
         fd.append('action',         'edit');
-        fd.append('saro_id',        document.getElementById('edit-saro-id').value);
-        fd.append('saro_no',        document.getElementById('edit-saro-no').value.trim());
-        fd.append('saro_title',     document.getElementById('edit-saro-title').value.trim());
-        fd.append('fiscal_year',    document.getElementById('edit-fiscal-year').value.trim());
-        fd.append('total_budget',   document.getElementById('edit-total-budget').value);
+        fd.append('saro_id',        id);
+        fd.append('saro_no',        saroNo.replace(/<\/?[^>]+(>|$)/g, ""));
+        fd.append('saro_title',     title.replace(/<\/?[^>]+(>|$)/g, ""));
+        fd.append('fiscal_year',    year.replace(/<\/?[^>]+(>|$)/g, ""));
+        fd.append('total_budget',   budget);
         fd.append('status',         document.getElementById('edit-status').value);
-        fd.append('date_released',  document.getElementById('edit-date-released').value);
-        fd.append('valid_until',    document.getElementById('edit-valid-until').value);
+        fd.append('date_released',  released);
+        fd.append('valid_until',    validUntil);
         fetch('data_entry.php', { method: 'POST', body: fd })
             .then(r => r.json())
             .then(res => { if (res.success) location.reload(); else alert(res.error || 'Error updating SARO.'); });
@@ -1015,30 +1110,38 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
         if (hint) hint.style.display = 'none';
         const row = document.createElement('div');
         row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr 56px 32px;gap:8px;' +
-                            'padding:8px 10px;border-bottom:1px solid #f1f5f9;align-items:center;' +
+                            'padding:8px 10px 18px;border-bottom:1px solid #f1f5f9;align-items:start;' +
                             'background:#fff;transition:background 0.15s ease;';
         row.onmouseenter = () => row.style.background = '#f5f8ff';
         row.onmouseleave = () => row.style.background = '#fff';
         row.innerHTML = `
-            <input type="text" placeholder="e.g. 5-02-03-070"
-                   style="width:100%;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;
-                          font-size:12px;font-family:'Poppins',sans-serif;font-weight:500;color:#0f172a;
-                          background:#f8fafc;outline:none;transition:all 0.2s ease;"
-                   onfocus="this.style.borderColor='#3b82f6';this.style.background='#fff';this.style.boxShadow='0 0 0 3px rgba(59,130,246,0.1)'"
-                   onblur="this.style.borderColor='#e2e8f0';this.style.background='#f8fafc';this.style.boxShadow='none'">
-            <input type="text" placeholder="e.g. ICT Equipment"
-                   style="width:100%;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;
-                          font-size:12px;font-family:'Poppins',sans-serif;font-weight:500;color:#0f172a;
-                          background:#f8fafc;outline:none;transition:all 0.2s ease;"
-                   onfocus="this.style.borderColor='#3b82f6';this.style.background='#fff';this.style.boxShadow='0 0 0 3px rgba(59,130,246,0.1)'"
-                   onblur="this.style.borderColor='#e2e8f0';this.style.background='#f8fafc';this.style.boxShadow='none'">
-            <input type="number" placeholder="0.00" min="0" step="0.01"
-                   style="width:100%;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;
-                          font-size:12px;font-family:'Poppins',sans-serif;font-weight:500;color:#0f172a;
-                          background:#f8fafc;outline:none;transition:all 0.2s ease;"
-                   onfocus="this.style.borderColor='#3b82f6';this.style.background='#fff';this.style.boxShadow='0 0 0 3px rgba(59,130,246,0.1)'"
-                   onblur="this.style.borderColor='#e2e8f0';this.style.background='#f8fafc';this.style.boxShadow='none'">
-            <div style="display:flex;align-items:center;justify-content:center;">
+            <div style="position:relative;">
+                <input type="text" placeholder="e.g. 5-02-03-070"
+                       style="width:100%;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;
+                              font-size:12px;font-family:'Poppins',sans-serif;font-weight:500;color:#0f172a;
+                              background:#f8fafc;outline:none;transition:all 0.2s ease;"
+                       onfocus="this.style.borderColor='#3b82f6';this.style.background='#fff';this.style.boxShadow='0 0 0 3px rgba(59,130,246,0.1)'"
+                       onblur="this.style.borderColor='#e2e8f0';this.style.background='#f8fafc';this.style.boxShadow='none'">
+                <p class="saro-err-msg" style="font-size:9px; color:#ef4444; margin-top:2px; font-weight:500; display:none; position:absolute; bottom:-14px; left:2px;">Required!</p>
+            </div>
+            <div>
+                <input type="text" placeholder="e.g. ICT Equipment"
+                       style="width:100%;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;
+                              font-size:12px;font-family:'Poppins',sans-serif;font-weight:500;color:#0f172a;
+                              background:#f8fafc;outline:none;transition:all 0.2s ease;"
+                       onfocus="this.style.borderColor='#3b82f6';this.style.background='#fff';this.style.boxShadow='0 0 0 3px rgba(59,130,246,0.1)'"
+                       onblur="this.style.borderColor='#e2e8f0';this.style.background='#f8fafc';this.style.boxShadow='none'">
+            </div>
+            <div style="position:relative;">
+                <input type="number" placeholder="0.00" min="0" step="0.01"
+                       style="width:100%;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;
+                              font-size:12px;font-family:'Poppins',sans-serif;font-weight:500;color:#0f172a;
+                              background:#f8fafc;outline:none;transition:all 0.2s ease;"
+                       onfocus="this.style.borderColor='#3b82f6';this.style.background='#fff';this.style.boxShadow='0 0 0 3px rgba(59,130,246,0.1)'"
+                       onblur="this.style.borderColor='#e2e8f0';this.style.background='#f8fafc';this.style.boxShadow='none'">
+                <p class="saro-err-msg" style="font-size:9px; color:#ef4444; margin-top:2px; font-weight:500; display:none; position:absolute; bottom:-14px; left:2px;">Required!</p>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:center;height:33px;">
                 <input type="checkbox" class="obj-travel-cb"
                        style="width:16px;height:16px;accent-color:#3b82f6;cursor:pointer;">
             </div>
@@ -1047,7 +1150,7 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                     style="width:28px;height:28px;border-radius:6px;border:1px solid transparent;
                            background:transparent;cursor:pointer;color:#94a3b8;
                            display:flex;align-items:center;justify-content:center;
-                           transition:all 0.2s ease;flex-shrink:0;"
+                           transition:all 0.2s ease;flex-shrink:0;margin-top:2px;"
                     onmouseenter="this.style.background='#fee2e2';this.style.borderColor='#fecaca';this.style.color='#dc2626'"
                     onmouseleave="this.style.background='transparent';this.style.borderColor='transparent';this.style.color='#94a3b8'">
                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1066,6 +1169,25 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
             if (hint) hint.style.display = '';
         }
     }
+
+    // Auto-clear red border on input
+    document.addEventListener('input', function(e) {
+        if (e.target.tagName === 'INPUT' && (e.target.style.borderColor === 'rgb(239, 68, 68)' || e.target.style.borderColor === '#ef4444')) {
+            if (e.target.value.trim()) {
+                e.target.style.borderColor = '';
+                const errId = 'err-' + e.target.id;
+                const errEl = document.getElementById(errId);
+                if (errEl) {
+                    errEl.style.display = 'none';
+                } else {
+                    const sibling = e.target.nextElementSibling;
+                    if (sibling && sibling.classList.contains('saro-err-msg')) {
+                        sibling.style.display = 'none';
+                    }
+                }
+            }
+        }
+    });
 </script>
 </body>
 </html>

@@ -23,7 +23,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $stmt = $conn->prepare(
                 "SELECT u.userId, u.username, u.first_name, u.last_name,
-                        u.password, u.status, u.roleId, r.role
+                        u.password, u.status, u.roleId, u.created_at, u.last_login, r.role,
+                        NOW() as current_db_time
                  FROM `user` u
                  JOIN `user_role` r ON r.roleId = u.roleId
                  WHERE u.username = ?
@@ -37,9 +38,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($user['status'] !== 'active') {
                 $error = 'Your account is inactive. Contact the administrator.';
             } else {
-                // Update last_login
-                $conn->prepare("UPDATE `user` SET last_login = NOW() WHERE userId = ?")
-                     ->execute([$user['userId']]);
+                $now = strtotime($user['current_db_time']);
+                $createdAt = strtotime($user['created_at']);
+                $lastLogin = $user['last_login'] ? strtotime($user['last_login']) : null;
+
+                // Time manipulation check
+                if ($now < $createdAt) {
+                    $error = 'System clock error: Current time is before account creation. Please correct your device date and time.';
+                } elseif ($lastLogin && $now < $lastLogin) {
+                    $error = 'System clock error: Current time is before your last login. Please correct your device date and time.';
+                } else {
+                    // Update last_login
+                    $conn->prepare("UPDATE `user` SET last_login = NOW() WHERE userId = ?")
+                         ->execute([$user['userId']]);
 
                 // Set session
                 $_SESSION['user_id']   = $user['userId'];
@@ -64,10 +75,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // Fail silently — login must always succeed
                 }
 
-                // Redirect based on role
-                $dest = ($user['roleId'] == 1) ? 'admin/dashboard.php' : 'saro/dashboard.php';
-                header('Location: ' . $dest);
-                exit;
+                    // Redirect based on role
+                    $dest = ($user['roleId'] == 1) ? 'admin/dashboard.php' : 'saro/dashboard.php';
+                    header('Location: ' . $dest);
+                    exit;
+                }
             }
         } catch (PDOException $e) {
             $error = 'Database error. Please try again later.';

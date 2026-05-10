@@ -19,12 +19,12 @@ $createError       = '';
 $createdUserName   = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'create_account') {
-    $firstName   = trim($_POST['first_name']   ?? '');
-    $lastName    = trim($_POST['last_name']     ?? '');
-    $middleName  = trim($_POST['middle_name']   ?? '') ?: null;
-    $phoneNumber = trim($_POST['phone_number']  ?? '') ?: null;
-    $uname       = trim($_POST['username']      ?? '');
-    $email       = trim($_POST['email']         ?? '');
+    $firstName   = strip_tags(trim($_POST['first_name']   ?? ''));
+    $lastName    = strip_tags(trim($_POST['last_name']     ?? ''));
+    $middleName  = strip_tags(trim($_POST['middle_name']   ?? '')) ?: null;
+    $phoneNumber = strip_tags(trim($_POST['phone_number']  ?? '')) ?: null;
+    $uname       = strip_tags(trim($_POST['username']      ?? ''));
+    $email       = filter_var(trim($_POST['email']         ?? ''), FILTER_SANITIZE_EMAIL);
     $roleId      = (int)($_POST['roleId']       ?? 0);
     $password    = $_POST['password']           ?? '';
     $confirmPw   = $_POST['confirm_password']   ?? '';
@@ -74,9 +74,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // ── Handle Edit User POST ──────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_user') {
     $editId     = (int)($_POST['edit_user_id'] ?? 0);
-    $firstName  = trim($_POST['first_name'] ?? '');
-    $lastName   = trim($_POST['last_name']  ?? '');
-    $email      = trim($_POST['email']      ?? '');
+    $firstName  = strip_tags(trim($_POST['first_name'] ?? ''));
+    $lastName   = strip_tags(trim($_POST['last_name']  ?? ''));
+    $email      = filter_var(trim($_POST['email']      ?? ''), FILTER_SANITIZE_EMAIL);
     $editRoleId = (int)($_POST['roleId']    ?? 0);
     $editStatus = in_array($_POST['status'] ?? '', ['active','inactive']) ? $_POST['status'] : 'active';
 
@@ -628,7 +628,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
             </button>
         </div>
 
-        <form method="POST" action="">
+        <form method="POST" action="" onsubmit="return validateCreateAccount(this)">
             <input type="hidden" name="action" value="create_account">
             <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
 
@@ -643,11 +643,13 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                 <div class="form-row">
                     <div class="form-group">
                         <label class="form-label">First Name <span style="color:#dc2626;">*</span></label>
-                        <input type="text" name="first_name" class="form-input" placeholder="e.g. Juan" value="<?= htmlspecialchars($_POST['first_name'] ?? '') ?>" required>
+                        <input type="text" name="first_name" class="form-input ca-req" placeholder="e.g. Juan" value="<?= htmlspecialchars($_POST['first_name'] ?? '') ?>">
+                        <p class="ca-err-msg" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">First name is required!</p>
                     </div>
                     <div class="form-group">
                         <label class="form-label">Last Name <span style="color:#dc2626;">*</span></label>
-                        <input type="text" name="last_name" class="form-input" placeholder="e.g. dela Cruz" value="<?= htmlspecialchars($_POST['last_name'] ?? '') ?>" required>
+                        <input type="text" name="last_name" class="form-input ca-req" placeholder="e.g. dela Cruz" value="<?= htmlspecialchars($_POST['last_name'] ?? '') ?>">
+                        <p class="ca-err-msg" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Last name is required!</p>
                     </div>
                 </div>
 
@@ -664,7 +666,8 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                     </div>
                     <div class="form-group">
                         <label class="form-label">Username <span style="color:#dc2626;">*</span></label>
-                        <input type="text" name="username" class="form-input" placeholder="e.g. jdelacruz" value="<?= htmlspecialchars($_POST['username'] ?? '') ?>" required>
+                        <input type="text" name="username" class="form-input ca-req" placeholder="e.g. jdelacruz" value="<?= htmlspecialchars($_POST['username'] ?? '') ?>">
+                        <p class="ca-err-msg" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Username is required!</p>
                     </div>
                 </div>
 
@@ -672,11 +675,12 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                 <div class="form-row">
                     <div class="form-group">
                         <label class="form-label">Email Address <span style="color:#dc2626;">*</span></label>
-                        <input type="email" name="email" class="form-input" placeholder="user@dict.gov.ph" value="<?= htmlspecialchars($_POST['email'] ?? '') ?>" required>
+                        <input type="email" name="email" class="form-input ca-req" placeholder="user@dict.gov.ph" value="<?= htmlspecialchars($_POST['email'] ?? '') ?>">
+                        <p class="ca-err-msg" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Email address is required!</p>
                     </div>
                     <div class="form-group">
                         <label class="form-label">Role <span style="color:#dc2626;">*</span></label>
-                        <select name="roleId" class="form-select" required>
+                        <select name="roleId" class="form-select ca-req">
                             <option value="">Select role…</option>
                             <?php foreach ($roles as $r): ?>
                             <option value="<?= $r['roleId'] ?>" <?= (($_POST['roleId'] ?? '') == $r['roleId']) ? 'selected' : '' ?>>
@@ -684,6 +688,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                             </option>
                             <?php endforeach; ?>
                         </select>
+                        <p class="ca-err-msg" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Role is required!</p>
                     </div>
                 </div>
 
@@ -692,20 +697,22 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                     <div class="form-group">
                         <label class="form-label">Password <span style="color:#dc2626;">*</span></label>
                         <div class="pw-input-wrap">
-                            <input type="password" name="password" class="form-input" id="modal-pw" placeholder="Enter password" required>
+                            <input type="password" name="password" class="form-input ca-req" id="modal-pw" placeholder="Enter password">
                             <button type="button" class="pw-show-btn" onclick="toggleModalPw('modal-pw')">
                                 <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
                             </button>
                         </div>
+                        <p class="ca-err-msg" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Password is required!</p>
                     </div>
                     <div class="form-group">
                         <label class="form-label">Confirm Password <span style="color:#dc2626;">*</span></label>
                         <div class="pw-input-wrap">
-                            <input type="password" name="confirm_password" class="form-input" id="modal-pw-confirm" placeholder="Repeat password" required>
+                            <input type="password" name="confirm_password" class="form-input ca-req" id="modal-pw-confirm" placeholder="Repeat password">
                             <button type="button" class="pw-show-btn" onclick="toggleModalPw('modal-pw-confirm')">
                                 <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
                             </button>
                         </div>
+                        <p class="ca-err-msg" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Confirm password is required!</p>
                     </div>
                 </div>
 
@@ -846,6 +853,50 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
 </div>
 
 <script>
+    function validateCreateAccount(form) {
+        // Security enhancement: strip HTML/JS tags from input fields automatically
+        form.querySelectorAll('.form-input').forEach(input => {
+            if (input.type === 'text' || input.type === 'email') {
+                input.value = input.value.replace(/<\/?[^>]+(>|$)/g, "");
+            }
+        });
+
+        let valid = true;
+        const reqFields = form.querySelectorAll('.ca-req');
+        reqFields.forEach(field => {
+            const wrapper = field.closest('.form-group');
+            const errMsg = wrapper.querySelector('.ca-err-msg');
+            
+            if (!field.value.trim()) {
+                field.style.borderColor = '#ef4444';
+                field.style.color = '#ef4444';
+                if (errMsg) errMsg.style.display = 'block';
+                valid = false;
+            } else {
+                field.style.borderColor = '';
+                field.style.color = '';
+                if (errMsg) errMsg.style.display = 'none';
+            }
+        });
+        return valid;
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        document.querySelectorAll('.ca-req').forEach(field => {
+            field.addEventListener('input', function() {
+                if (this.value.trim()) {
+                    this.style.borderColor = '';
+                    this.style.color = '';
+                    const wrapper = this.closest('.form-group');
+                    if (wrapper) {
+                        const errMsg = wrapper.querySelector('.ca-err-msg');
+                        if (errMsg) errMsg.style.display = 'none';
+                    }
+                }
+            });
+        });
+    });
+
     function toggleModalPw(id) {
         const el = document.getElementById(id);
         el.type = el.type === 'password' ? 'text' : 'password';
