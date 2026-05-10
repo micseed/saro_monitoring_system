@@ -370,10 +370,10 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                     </div>
                     <div style="display:flex;align-items:center;gap:10px;">
                         <div class="filter-tabs">
-                            <button class="filter-tab active" onclick="filterTab(this)">All</button>
-                            <button class="filter-tab" onclick="filterTab(this)">Pending</button>
-                            <button class="filter-tab" onclick="filterTab(this)">Approved</button>
-                            <button class="filter-tab" onclick="filterTab(this)">Rejected</button>
+                            <button type="button" class="filter-tab active">All</button>
+                            <button type="button" class="filter-tab">Pending</button>
+                            <button type="button" class="filter-tab">Approved</button>
+                            <button type="button" class="filter-tab">Rejected</button>
                         </div>
                         <div class="search-wrap">
                             <svg class="search-icon" width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
@@ -538,11 +538,6 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
 </form>
 
 <script>
-    function filterTab(el) {
-        document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
-        el.classList.add('active');
-    }
-
     function openResolve(type, name, requestId) {
         const modal      = document.getElementById('modal-resolve');
         const icon       = document.getElementById('modal-icon');
@@ -615,5 +610,6 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
         if (e.target === document.getElementById('modal-resolve')) closeModal();
     }
 </script>
+<script src="../assets/js/table_controls.js"></script>
 </body>
 </html>

@@ -546,5 +546,6 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
         barCtx.insertAdjacentHTML('afterend', '<div style="height:180px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;"><svg width="32" height="32" fill="none" stroke="#cbd5e1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg><p style="font-size:12px;color:#94a3b8;font-weight:600;">No SARO data available</p></div>');
     }
 </script>
+<script src="../assets/js/table_controls.js"></script>
 </body>
 </html>

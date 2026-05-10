@@ -636,5 +636,6 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
 </div>
 <script>
 </script>
+<script src="../assets/js/table_controls.js"></script>
 </body>
 </html>

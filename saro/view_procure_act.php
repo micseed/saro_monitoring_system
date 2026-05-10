@@ -18,6 +18,18 @@ $conn = $db->connect();
 if (!empty($_POST['ajax_action'])) {
     header('Content-Type: application/json');
     $action = $_POST['ajax_action'];
+    $ownsProcurement = static function (PDO $conn, int $procId, int $uid): bool {
+        if ($procId <= 0 || $uid <= 0) return false;
+        $st = $conn->prepare("
+            SELECT 1
+            FROM procurement p
+            INNER JOIN object_code oc ON p.objectId = oc.objectId
+            INNER JOIN saro s ON oc.saroId = s.saroId
+            WHERE p.procurementId = ? AND s.userId = ?
+        ");
+        $st->execute([$procId, $uid]);
+        return (bool)$st->fetchColumn();
+    };
 
     if ($action === 'toggle_signature') {
         $procId   = (int)($_POST['procurementId'] ?? 0);
@@ -26,6 +38,10 @@ if (!empty($_POST['ajax_action'])) {
 
         if (!$procId || !$signId) {
             echo json_encode(['success' => false, 'error' => 'Missing params']);
+            exit;
+        }
+        if (!$ownsProcurement($conn, $procId, $userId)) {
+            echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can update signatures.']);
             exit;
         }
 
@@ -60,6 +76,10 @@ if (!empty($_POST['ajax_action'])) {
             echo json_encode(['success' => false, 'error' => 'Missing params']);
             exit;
         }
+        if (!$ownsProcurement($conn, $procId, $userId)) {
+            echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can update required documents.']);
+            exit;
+        }
 
         if ($curState == 0) {
             $s = $conn->prepare("INSERT INTO proc_documents (procurementId, documentId, status) VALUES (?, ?, 'waived') ON DUPLICATE KEY UPDATE status='waived'");
@@ -86,6 +106,10 @@ if (!empty($_POST['ajax_action'])) {
     if ($action === 'cancel_procurement') {
         $procId = (int)($_POST['procurementId'] ?? 0);
         if (!$procId) { echo json_encode(['success' => false, 'error' => 'Missing procurementId']); exit; }
+        if (!$ownsProcurement($conn, $procId, $userId)) {
+            echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can cancel procurement activities.']);
+            exit;
+        }
 
         $conn->prepare("UPDATE procurement SET status='cancelled' WHERE procurementId=?")->execute([$procId]);
 
@@ -118,6 +142,7 @@ $saro = $stmtSaro->fetch(PDO::FETCH_ASSOC);
 if (!$saro) {
     die("SARO Not Found");
 }
+$canManageSaro = ((int)($saro['userId'] ?? 0) === $userId);
 
 $stmtProc = $conn->prepare("
     SELECT p.*, oc.code AS object_code_str
@@ -485,7 +510,8 @@ foreach ($procurements as $p) {
                                                                 data-proc-id="<?= (int)$p['procurementId'] ?>"
                                                                 data-doc-id="<?= (int)$doc['documentId'] ?>"
                                                                 data-doc-name="<?= htmlspecialchars($doc['document_name']) ?>"
-                                                                data-state="<?= (int)$doc['is_checked'] ?>">
+                                                                data-state="<?= (int)$doc['is_checked'] ?>"
+                                                                <?= $canManageSaro ? '' : 'disabled title="View only"' ?>>
                                                             <?php if ($doc['is_checked']): ?>
                                                                 <svg width="10" height="10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                                                             <?php else: ?>
@@ -522,7 +548,8 @@ foreach ($procurements as $p) {
                                                         data-state="<?= $state ?>"
                                                         data-proc-id="<?= (int)$p['procurementId'] ?>"
                                                         data-sign-id="<?= $signId ?>"
-                                                        title="Toggle Status">
+                                                        title="<?= $canManageSaro ? 'Toggle Status' : 'View only' ?>"
+                                                        <?= $canManageSaro ? '' : 'disabled' ?>>
                                                     <?php if ($state == 1): ?>
                                                         <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
                                                     <?php else: ?>
@@ -563,6 +590,8 @@ foreach ($procurements as $p) {
                                             <span style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:#fee2e2;border:1px solid #fecaca;border-radius:5px;font-size:9px;font-weight:700;color:#dc2626;">
                                                 Cancelled
                                             </span>
+                                        <?php elseif (!$canManageSaro): ?>
+                                            <span style="font-size:10px;color:#cbd5e1;font-style:italic;">View only</span>
                                         <?php else: ?>
                                             <button class="cancel-btn"
                                                     data-proc-id="<?= (int)$p['procurementId'] ?>"
@@ -649,6 +678,7 @@ foreach ($procurements as $p) {
     const checkSvg10 = `<svg width="10" height="10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>`;
     const clockSvg10 = `<svg width="10" height="10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`;
     const saroBudget = <?= (float)$totalSaroBudget ?>;
+    const canManageSaro = <?= $canManageSaro ? 'true' : 'false' ?>;
 
     function fmtMoney(n) {
         return '₱' + Number(n).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
@@ -697,6 +727,7 @@ foreach ($procurements as $p) {
     // Signature toggle (regular procurement)
     document.querySelectorAll('.sig-btn').forEach(btn => {
         btn.addEventListener('click', function () {
+            if (!canManageSaro) return;
             const procId   = this.dataset.procId;
             const signId   = this.dataset.signId;
             const curState = this.dataset.state;
@@ -726,6 +757,7 @@ foreach ($procurements as $p) {
 
     // Cancel procurement activity modal functions
     function openCancelModal(procId, procName) {
+        if (!canManageSaro) return;
         document.getElementById('cancel-proc-id').value = procId;
         document.getElementById('cancel-proc-name').textContent = procName;
         document.getElementById('cancelModal').style.display = 'flex';
@@ -738,6 +770,7 @@ foreach ($procurements as $p) {
     });
 
     function confirmCancel() {
+        if (!canManageSaro) return;
         const procId = document.getElementById('cancel-proc-id').value;
         const btn = document.getElementById('confirm-cancel-btn');
         btn.disabled = true;
@@ -773,6 +806,7 @@ foreach ($procurements as $p) {
     // Travel document toggle
     document.querySelectorAll('.doc-cb-btn').forEach(btn => {
         btn.addEventListener('click', function () {
+            if (!canManageSaro) return;
             const procId   = this.dataset.procId;
             const docId    = this.dataset.docId;
             const docName  = this.dataset.docName;

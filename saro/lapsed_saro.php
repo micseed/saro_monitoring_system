@@ -191,4 +191,5 @@ function filterRows(q) {
     });
 }
 </script>
+<script src="../assets/js/table_controls.js"></script>
 </body></html>

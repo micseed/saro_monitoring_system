@@ -2526,5 +2526,6 @@ if ($bur < 25) {
     </div>
 </div>
 
+<script src="../assets/js/table_controls.js"></script>
 </body>
 </html>

@@ -385,5 +385,6 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
 </div>
 <script>
 </script>
+<script src="../assets/js/table_controls.js"></script>
 </body>
 </html>

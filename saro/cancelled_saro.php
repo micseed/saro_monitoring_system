@@ -285,5 +285,6 @@ $totalNotif    = $unreadCount + ($approvedPwReq ? 1 : 0);
     }
 
 </script>
+<script src="../assets/js/table_controls.js"></script>
 </body>
 </html>
