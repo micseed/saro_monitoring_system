@@ -222,7 +222,7 @@ class Account {
             SELECT a.*, u.first_name, u.last_name 
             FROM audit_logs a
             LEFT JOIN user u ON a.userId = u.userId
-            ORDER BY a.timestamp DESC
+            ORDER BY a.created_at DESC
             LIMIT :limit
         ");
         $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
@@ -277,7 +277,9 @@ class Account {
             INNER JOIN user u ON a.userId = u.userId
             INNER JOIN user_role ur ON ur.roleId = u.roleId
             WHERE ur.role = 'Admin'
-            ORDER BY a.timestamp DESC
+              AND a.affected_table IN ('saro', 'procurement')
+              AND a.action IN ('create', 'edit', 'delete', 'view', 'cancelled')
+            ORDER BY a.created_at DESC
             LIMIT :limit
         ");
         $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
@@ -286,7 +288,7 @@ class Account {
     }
 
     /**
-     * Count audit logs only from Admin-role users.
+     * Count audit logs only from Admin-role users on saro/procurement tables.
      */
     public function countAdminLogs(): int {
         $stmt = $this->pdo->query("
@@ -295,6 +297,8 @@ class Account {
             INNER JOIN user u ON a.userId = u.userId
             INNER JOIN user_role ur ON ur.roleId = u.roleId
             WHERE ur.role = 'Admin'
+              AND a.affected_table IN ('saro', 'procurement')
+              AND a.action IN ('create', 'edit', 'delete', 'view', 'cancelled')
         ");
         return (int) $stmt->fetchColumn();
     }

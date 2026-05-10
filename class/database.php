@@ -4,7 +4,7 @@ class Database{
     private $host = "127.0.0.1";
     private $username = "root";
     private $password = "";
-    private $dbname = "monitoring_db";
+    private $dbname = "saro_db";
 
     protected $conn;
 

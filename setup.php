@@ -2,7 +2,7 @@
 // ── Guard: redirect if already installed ──
 $installed = false;
 try {
-    $pdo = new PDO("mysql:host=127.0.0.1;dbname=monitoring_db", "root", "", [
+    $pdo = new PDO("mysql:host=127.0.0.1;dbname=saro_db", "root", "", [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
     ]);
     $n = $pdo->query("SELECT COUNT(*) FROM `user` WHERE roleId = 1")->fetchColumn();
@@ -36,196 +36,13 @@ if (!$installed && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $tmp = new PDO("mysql:host=127.0.0.1", "root", "", [
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             ]);
-            $tmp->exec("CREATE DATABASE IF NOT EXISTS `monitoring_db`
+            $tmp->exec("CREATE DATABASE IF NOT EXISTS `saro_db`
                         CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
             unset($tmp);
 
-            $conn = new PDO("mysql:host=127.0.0.1;dbname=monitoring_db", "root", "", [
+            $conn = new PDO("mysql:host=127.0.0.1;dbname=saro_db", "root", "", [
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             ]);
-            $conn->exec("SET FOREIGN_KEY_CHECKS = 0");
-
-            // ── 1. user_role ──
-            $conn->exec("CREATE TABLE IF NOT EXISTS `user_role` (
-                roleId INT         PRIMARY KEY AUTO_INCREMENT,
-                role   VARCHAR(50) NOT NULL UNIQUE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            $conn->exec("INSERT IGNORE INTO `user_role` (roleId, role) VALUES
-                (1, 'Super Admin'),
-                (2, 'Admin')");
-
-            // ── 2. user ──
-            $conn->exec("CREATE TABLE IF NOT EXISTS `user` (
-                userId       INT          PRIMARY KEY AUTO_INCREMENT,
-                roleId       INT          NOT NULL,
-                last_name    VARCHAR(50)  NOT NULL,
-                first_name   VARCHAR(50)  NOT NULL,
-                middle_name  VARCHAR(50),
-                phone_number VARCHAR(20),
-                username     VARCHAR(50)  NOT NULL UNIQUE,
-                email        VARCHAR(100) NOT NULL UNIQUE,
-                password     VARCHAR(255) NOT NULL,
-                status       ENUM('active','inactive') NOT NULL DEFAULT 'active',
-                last_login   DATETIME,
-                created_by   INT,
-                created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                FOREIGN KEY (roleId)     REFERENCES user_role(roleId),
-                FOREIGN KEY (created_by) REFERENCES `user`(userId) ON DELETE SET NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            // ── 3. password_requests ──
-            $conn->exec("CREATE TABLE IF NOT EXISTS `password_requests` (
-                requestId    INT  PRIMARY KEY AUTO_INCREMENT,
-                userId       INT  NOT NULL,
-                reason       TEXT NOT NULL,
-                status       ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
-                admin_note   TEXT,
-                resolved_by  INT,
-                requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                resolved_at  DATETIME,
-                FOREIGN KEY (userId)      REFERENCES `user`(userId)  ON DELETE CASCADE,
-                FOREIGN KEY (resolved_by) REFERENCES `user`(userId)  ON DELETE SET NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            // ── 4. audit_logs ──
-            $conn->exec("CREATE TABLE IF NOT EXISTS `audit_logs` (
-                logId          INT PRIMARY KEY AUTO_INCREMENT,
-                userId         INT,
-                action         ENUM('login','logout','create','edit','delete','view','approve','reject') NOT NULL,
-                details        TEXT,
-                affected_table VARCHAR(50),
-                record_id      INT,
-                ip_address     VARCHAR(45),
-                timestamp      DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (userId) REFERENCES `user`(userId) ON DELETE SET NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            // ── 5. saro ──
-            $conn->exec("CREATE TABLE IF NOT EXISTS `saro` (
-                saroId       INT           PRIMARY KEY AUTO_INCREMENT,
-                userId       INT           NOT NULL,
-                saroNo       VARCHAR(50)   NOT NULL UNIQUE,
-                saro_title   VARCHAR(150)  NOT NULL,
-                fiscal_year  YEAR          NOT NULL,
-                total_budget DECIMAL(15,2) NOT NULL,
-                status       ENUM('active','cancelled') NOT NULL DEFAULT 'active',
-                created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                FOREIGN KEY (userId) REFERENCES `user`(userId)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            // ── 6. object_code ──
-            $conn->exec("CREATE TABLE IF NOT EXISTS `object_code` (
-                objectId       INT           PRIMARY KEY AUTO_INCREMENT,
-                saroId         INT           NOT NULL,
-                code           VARCHAR(50)   NOT NULL,
-                projected_cost DECIMAL(15,2) NOT NULL DEFAULT 0.00,
-                FOREIGN KEY (saroId) REFERENCES saro(saroId) ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            // ── 7. expense_items ──
-            $conn->exec("CREATE TABLE IF NOT EXISTS `expense_items` (
-                itemId    INT          PRIMARY KEY AUTO_INCREMENT,
-                objectId  INT          NOT NULL,
-                item_name VARCHAR(150) NOT NULL,
-                FOREIGN KEY (objectId) REFERENCES object_code(objectId) ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            // ── 8. procurement ──
-            $conn->exec("CREATE TABLE IF NOT EXISTS `procurement` (
-                procurementId    INT           PRIMARY KEY AUTO_INCREMENT,
-                objectId         INT           NOT NULL,
-                pro_act          VARCHAR(150),
-                is_travelExpense BOOLEAN       NOT NULL DEFAULT FALSE,
-                quantity         INT,
-                unit             VARCHAR(50),
-                unit_cost        DECIMAL(15,2),
-                obligated_amount DECIMAL(15,2),
-                period_start     DATE,
-                period_end       DATE,
-                proc_date        DATE,
-                remarks          TEXT,
-                created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (objectId) REFERENCES object_code(objectId) ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            // ── 9. required_documents ──
-            $conn->exec("CREATE TABLE IF NOT EXISTS `required_documents` (
-                documentId         INT          PRIMARY KEY AUTO_INCREMENT,
-                document_name      VARCHAR(150) NOT NULL,
-                applies_to_regular BOOLEAN      NOT NULL DEFAULT TRUE,
-                applies_to_travel  BOOLEAN      NOT NULL DEFAULT FALSE,
-                sort_order         INT          NOT NULL DEFAULT 0
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            $conn->exec("INSERT IGNORE INTO `required_documents`
-                (documentId, document_name, applies_to_regular, applies_to_travel, sort_order) VALUES
-                (1,  'Purchase Request',          1, 0, 1),
-                (2,  'Quotation Sheet',           1, 0, 2),
-                (3,  'Mayor''s Permit',           1, 0, 3),
-                (4,  'BIR 2303',                  1, 0, 4),
-                (5,  'Supplemental APP',          1, 0, 5),
-                (6,  'Notice of Award',           1, 0, 6),
-                (7,  'Notice to Proceed',         1, 0, 7),
-                (8,  'Inspection and Acceptance', 1, 0, 8),
-                (9,  'Travel Order',              0, 1, 1),
-                (10, 'Itinerary',                 0, 1, 2),
-                (11, 'Certificate of Travel',     0, 1, 3),
-                (12, 'Reimbursement Report',      0, 1, 4),
-                (13, 'CENRR',                     0, 1, 5),
-                (14, 'Travel Report',             0, 1, 6),
-                (15, 'Travel Summary',            0, 1, 7)");
-
-            // ── 10. procurement_status ──
-            $conn->exec("CREATE TABLE IF NOT EXISTS `procurement_status` (
-                statusId      INT  PRIMARY KEY AUTO_INCREMENT,
-                procurementId INT  NOT NULL,
-                documentId    INT  NOT NULL,
-                status        ENUM('pending','received','not_required') NOT NULL DEFAULT 'pending',
-                updated_by    INT,
-                updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                UNIQUE KEY uq_proc_doc (procurementId, documentId),
-                FOREIGN KEY (procurementId) REFERENCES procurement(procurementId) ON DELETE CASCADE,
-                FOREIGN KEY (documentId)    REFERENCES required_documents(documentId),
-                FOREIGN KEY (updated_by)    REFERENCES `user`(userId) ON DELETE SET NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            // ── 11. signatory_role ──
-            $conn->exec("CREATE TABLE IF NOT EXISTS `signatory_role` (
-                signId      INT          PRIMARY KEY AUTO_INCREMENT,
-                sign_name   VARCHAR(100) NOT NULL,
-                sign_order  INT          NOT NULL,
-                is_required BOOLEAN      NOT NULL DEFAULT TRUE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            $conn->exec("INSERT IGNORE INTO `signatory_role`
-                (signId, sign_name, sign_order, is_required) VALUES
-                (1, 'Budget Officer Signature', 1, 1),
-                (2, 'End User Signature',       2, 1),
-                (3, 'BAC Chair Signature',      3, 1),
-                (4, 'RD Signature',             4, 1),
-                (5, 'PO Creation',              5, 1),
-                (6, 'Finance Signature',        6, 1),
-                (7, 'Conforme Signature',       7, 1)");
-
-            // ── 12. proc_approval ──
-            $conn->exec("CREATE TABLE IF NOT EXISTS `proc_approval` (
-                approvId      INT  PRIMARY KEY AUTO_INCREMENT,
-                procurementId INT  NOT NULL,
-                signId        INT  NOT NULL,
-                status        ENUM('approved','rejected') NOT NULL,
-                approved_by   INT,
-                remarks       TEXT,
-                approval_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE KEY uq_proc_sign (procurementId, signId),
-                FOREIGN KEY (procurementId) REFERENCES procurement(procurementId)  ON DELETE CASCADE,
-                FOREIGN KEY (signId)        REFERENCES signatory_role(signId),
-                FOREIGN KEY (approved_by)   REFERENCES `user`(userId)              ON DELETE SET NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-            $conn->exec("SET FOREIGN_KEY_CHECKS = 1");
 
             // ── Insert Super Admin ──
             $hash = password_hash($pw, PASSWORD_DEFAULT);
@@ -437,7 +254,7 @@ if (!$installed && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
         <div class="alert alert-success" style="margin-bottom:16px;">
             <svg style="flex-shrink:0;margin-top:1px;" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            <span>All database tables created and seeded. Your Super Admin account is ready.</span>
+            <span>Super Admin account created successfully.</span>
         </div>
         <div class="alert alert-warn" style="margin-bottom:20px;">
             <svg style="flex-shrink:0;margin-top:1px;" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
@@ -482,12 +299,6 @@ if (!$installed && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="step-dot idle">3</div>
                 <span class="step-label">Done</span>
             </div>
-        </div>
-
-        <!-- DB info notice -->
-        <div class="alert alert-info" style="margin-bottom:20px;">
-            <svg style="flex-shrink:0;margin-top:1px;" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            <span>Database: <strong>monitoring_db</strong> on <strong>127.0.0.1</strong> (root / no password). All tables will be created automatically.</span>
         </div>
 
         <!-- Error -->
@@ -614,7 +425,7 @@ if (!$installed && $_SERVER['REQUEST_METHOD'] === 'POST') {
                             display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                     <svg width="14" height="14" fill="none" stroke="#60a5fa" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4"/></svg>
                 </div>
-                <span style="font-size:12px;color:rgba(255,255,255,0.7);font-weight:500;">Creates all 12 database tables</span>
+                <span style="font-size:12px;color:rgba(255,255,255,0.7);font-weight:500;">Requires database.sql imported manually first</span>
             </div>
             <div style="display:flex;align-items:center;gap:10px;">
                 <div style="width:28px;height:28px;border-radius:8px;background:rgba(255,255,255,0.1);

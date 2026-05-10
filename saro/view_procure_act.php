@@ -9,6 +9,101 @@ require_once __DIR__ . '/../class/procurement_status.php';
 $username = $_SESSION['full_name'] ?? 'User';
 $role     = $_SESSION['role'] ?? 'Role';
 $initials = $_SESSION['initials'] ?? 'U';
+$userId   = (int)($_SESSION['user_id'] ?? 0);
+
+$db   = new Database();
+$conn = $db->connect();
+
+// ── AJAX handlers ─────────────────────────────────────────────────────────────
+if (!empty($_POST['ajax_action'])) {
+    header('Content-Type: application/json');
+    $action = $_POST['ajax_action'];
+
+    if ($action === 'toggle_signature') {
+        $procId   = (int)($_POST['procurementId'] ?? 0);
+        $signId   = (int)($_POST['signId']        ?? 0);
+        $curState = (int)($_POST['current_state'] ?? 0);
+
+        if (!$procId || !$signId) {
+            echo json_encode(['success' => false, 'error' => 'Missing params']);
+            exit;
+        }
+
+        if ($curState == 0) {
+            $s = $conn->prepare("INSERT INTO proc_signatures (procurementId, signId, status) VALUES (?, ?, 'waived') ON DUPLICATE KEY UPDATE status='waived'");
+            $s->execute([$procId, $signId]);
+            $newState = 1;
+        } else {
+            $s = $conn->prepare("DELETE FROM proc_signatures WHERE procurementId=? AND signId=?");
+            $s->execute([$procId, $signId]);
+            $newState = 0;
+        }
+
+        $sc = $conn->prepare("SELECT COUNT(*) FROM proc_signatures WHERE procurementId=? AND status='waived'");
+        $sc->execute([$procId]);
+        $signed = (int)$sc->fetchColumn();
+        $total  = (int)$conn->query("SELECT COUNT(*) FROM signatory_role WHERE applies_to_regular=1")->fetchColumn();
+
+        $newStatus = ($total > 0 && $signed >= $total) ? 'obligated' : 'on_process';
+        $conn->prepare("UPDATE procurement SET status=? WHERE procurementId=?")->execute([$newStatus, $procId]);
+
+        echo json_encode(['success' => true, 'new_state' => $newState, 'status' => $newStatus]);
+        exit;
+    }
+
+    if ($action === 'toggle_travel_doc') {
+        $procId   = (int)($_POST['procurementId'] ?? 0);
+        $docId    = (int)($_POST['documentId']    ?? 0);
+        $curState = (int)($_POST['current_state'] ?? 0);
+
+        if (!$procId || !$docId) {
+            echo json_encode(['success' => false, 'error' => 'Missing params']);
+            exit;
+        }
+
+        if ($curState == 0) {
+            $s = $conn->prepare("INSERT INTO proc_documents (procurementId, documentId, status) VALUES (?, ?, 'waived') ON DUPLICATE KEY UPDATE status='waived'");
+            $s->execute([$procId, $docId]);
+            $newState = 1;
+        } else {
+            $s = $conn->prepare("DELETE FROM proc_documents WHERE procurementId=? AND documentId=?");
+            $s->execute([$procId, $docId]);
+            $newState = 0;
+        }
+
+        $sc = $conn->prepare("SELECT COUNT(*) FROM proc_documents WHERE procurementId=?");
+        $sc->execute([$procId]);
+        $checked = (int)$sc->fetchColumn();
+        $total   = (int)$conn->query("SELECT COUNT(*) FROM required_documents WHERE applies_to_travel=1")->fetchColumn();
+
+        $newStatus = ($total > 0 && $checked >= $total) ? 'obligated' : 'on_process';
+        $conn->prepare("UPDATE procurement SET status=? WHERE procurementId=?")->execute([$newStatus, $procId]);
+
+        echo json_encode(['success' => true, 'new_state' => $newState, 'status' => $newStatus]);
+        exit;
+    }
+
+    if ($action === 'cancel_procurement') {
+        $procId = (int)($_POST['procurementId'] ?? 0);
+        if (!$procId) { echo json_encode(['success' => false, 'error' => 'Missing procurementId']); exit; }
+
+        $conn->prepare("UPDATE procurement SET status='cancelled' WHERE procurementId=?")->execute([$procId]);
+
+        $userId = $_SESSION['user_id'] ?? null;
+        $ip     = $_SERVER['REMOTE_ADDR'] ?? null;
+        $conn->prepare("INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address) VALUES (?, 'cancelled', 'Cancelled procurement activity', 'procurement', ?, ?)")
+             ->execute([$userId, $procId, $ip]);
+
+        echo json_encode(['success' => true]);
+        exit;
+    }
+
+    echo json_encode(['success' => false, 'error' => 'Unknown action']);
+    exit;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+$statusObj = new ProcurementStatus();
 
 $saroId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 if (!$saroId) {
@@ -16,32 +111,38 @@ if (!$saroId) {
     exit;
 }
 
-$db = new Database();
-$conn = $db->connect();
-$statusObj = new ProcurementStatus();
-
-// Fetch SARO info
 $stmtSaro = $conn->prepare("SELECT * FROM saro WHERE saroId = ?");
 $stmtSaro->execute([$saroId]);
 $saro = $stmtSaro->fetch(PDO::FETCH_ASSOC);
 
-if(!$saro) {
+if (!$saro) {
     die("SARO Not Found");
 }
 
-// Fetch Procurement Activities
 $stmtProc = $conn->prepare("
-    SELECT p.*, oc.code as object_code_str 
+    SELECT p.*, oc.code AS object_code_str
     FROM procurement p
     JOIN object_code oc ON p.objectId = oc.objectId
     WHERE oc.saroId = ?
-    ORDER BY p.created_at DESC
+    ORDER BY p.created_at ASC
 ");
 $stmtProc->execute([$saroId]);
 $procurements = $stmtProc->fetchAll(PDO::FETCH_ASSOC);
 
-$totalSaroBudget = (float)$saro['total_budget'];
+require_once __DIR__ . '/../class/notification.php';
+$notifObj      = new Notification();
+$notifications = $notifObj->getRecentActivity((int)$_SESSION['user_id'], 10);
+$unreadCount   = $notifObj->countUnread($userId);
+$approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
+$cancelledCount = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='cancelled'")->fetchColumn();
+
+$totalSaroBudget      = (float)$saro['total_budget'];
 $totalObligatedAmount = 0;
+foreach ($procurements as $p) {
+    if ($p['status'] === 'obligated') {
+        $totalObligatedAmount += (float)($p['unit_cost'] ?? 0) * (int)($p['quantity'] ?? 0);
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -54,7 +155,6 @@ $totalObligatedAmount = 0;
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,700;1,800;1,900&display=swap" rel="stylesheet">
     <style>
-        /* Basic Resets & Scrollbar */
         * { font-family: 'Poppins', ui-sans-serif, system-ui, sans-serif; box-sizing: border-box; margin: 0; padding: 0; }
         html, body { height: 100%; overflow: hidden; background: #f0f4ff; }
         ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -63,7 +163,6 @@ $totalObligatedAmount = 0;
         ::-webkit-scrollbar-thumb:hover { background: #93c5fd; }
         .layout { display: flex; height: 100vh; }
 
-        /* ── Sidebar ── */
         .sidebar {
             width: 256px; flex-shrink: 0;
             display: flex; flex-direction: column;
@@ -143,41 +242,40 @@ $totalObligatedAmount = 0;
         .notif-dot { position: absolute; top: 7px; right: 7px; width: 7px; height: 7px; background: #ef4444; border-radius: 50%; border: 1.5px solid #fff; }
         .content { flex: 1; overflow-y: auto; padding: 28px 32px; }
 
-        /* Panels */
         .saro-card { background: #fff; border: 1px solid #e8edf5; border-radius: 14px; padding: 20px 28px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; gap: 24px; position: relative; overflow: hidden; }
         .table-panel { background: #fff; border: 1px solid #e8edf5; border-radius: 16px; overflow: hidden; display: flex; flex-direction: column; }
         .panel-header { padding: 16px 24px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
 
-        /* Complex table */
         table { width: 100%; border-collapse: collapse; }
         thead tr.th-primary th { padding: 11px 14px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #fff; background: #0f172a; border-right: 1px solid rgba(255,255,255,0.08); white-space: nowrap; text-align: center; }
-        thead tr.th-primary th:first-child { text-align: left; border-radius: 0; }
+        thead tr.th-primary th:first-child { text-align: left; }
         thead tr.th-primary th.group-pr { background: #1e3a8a; }
         thead tr.th-primary th.group-po { background: #1e40af; }
         thead tr.th-secondary th { padding: 8px 12px; font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #cbd5e1; background: #1e293b; border-right: 1px solid rgba(255,255,255,0.06); border-bottom: 1px solid rgba(255,255,255,0.08); white-space: nowrap; text-align: center; }
         thead tr.th-secondary th.sub-pr { background: #1e3a8a; color: #bfdbfe; }
         thead tr.th-secondary th.sub-po { background: #1e40af; color: #bfdbfe; }
-        
+
         tbody tr { border-bottom: 1px solid #f1f5f9; transition: background 0.15s ease; }
         tbody tr:hover { background: #f5f8ff; }
         tbody td { padding: 13px 14px; font-size: 12px; color: #475569; border-right: 1px solid #f1f5f9; text-align: center; vertical-align: middle; }
         tbody td:first-child { text-align: left; }
         tbody td:last-child { border-right: none; }
 
-        /* Badges & Buttons */
         .doc-badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 6px; background: #f1f5f9; border: 1px solid #e2e8f0; font-size: 10px; font-weight: 600; color: #475569; white-space: nowrap; }
         .doc-badge.missing { background:#fff7ed;border-color:#fed7aa;color:#92400e; }
         .doc-badge.checked { background:#dcfce7;border-color:#bbf7d0;color:#16a34a; }
+        button.doc-badge { font-family: inherit; cursor: pointer; transition: opacity 0.15s; }
+        button.doc-badge:hover { opacity: 0.8; }
+        button.doc-badge:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .sig-btn { width:28px;height:28px;border-radius:50%;border:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:all 0.2s ease; }
         .sig-btn[data-state="1"] { background:#dcfce7;border:1.5px solid #bbf7d0;color:#16a34a; }
         .sig-btn[data-state="0"] { background:#fef9c3;border:1.5px solid #fde68a;color:#b45309; }
-        
+        .sig-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
         .action-btn { width:28px;height:28px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;border:1px solid transparent;cursor:pointer;background:transparent;transition:all 0.2s ease; }
         .action-btn-del { color:#94a3b8; }
         .action-btn-del:hover { background:#fee2e2;border-color:#fecaca;color:#dc2626; }
-        .action-btn-cancel { color:#b45309; }
-        .action-btn-cancel:hover { background:#fef9c3;border-color:#fde68a;color:#92400e; }
 
         .panel-footer { padding: 14px 24px; border-top: 1px solid #f1f5f9; background: #fafbfe; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
     </style>
@@ -185,7 +283,6 @@ $totalObligatedAmount = 0;
 <body>
 <div class="layout">
 
-    <!-- ══ Sidebar ══ -->
     <aside class="sidebar">
         <div class="sidebar-brand">
             <div class="brand-logo">
@@ -219,6 +316,14 @@ $totalObligatedAmount = 0;
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
             </a>
+            <p class="nav-section-label">History</p>
+            <a href="cancelled_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                Cancelled SAROs
+                <?php if ($cancelledCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#b45309;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $cancelledCount ?></span>
+                <?php endif; ?>
+            </a>
             <p class="nav-section-label">Account</p>
             <a href="settings.php" class="nav-item">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -251,16 +356,10 @@ $totalObligatedAmount = 0;
                 <span class="breadcrumb-active">View Activities</span>
             </div>
             <div class="topbar-right">
-                <div class="icon-btn">
-                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-                    <span class="notif-dot"></span>
-                </div>
-                <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;
-                            background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
-                    <div style="width:28px;height:28px;border-radius:7px;
-                                background:linear-gradient(135deg,#2563eb,#1d4ed8);
-                                display:flex;align-items:center;justify-content:center;
-                                font-size:10px;font-weight:800;color:#fff;">
+                <!-- Notification -->
+                <?php $isAdmin = false; $pendingPwCount = $pendingPwCount ?? 0; $approvedPwReq = $approvedPwReq ?? null; include __DIR__ . '/../includes/notif_dropdown.php'; ?>
+                <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
+                    <div style="width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#2563eb,#1d4ed8);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff;">
                         <?= htmlspecialchars($initials) ?>
                     </div>
                     <div>
@@ -302,7 +401,7 @@ $totalObligatedAmount = 0;
                         </div>
                         <div>
                             <p style="font-size:13px;font-weight:800;color:#0f172a;">Procurement Activities</p>
-                            <p style="font-size:10px;color:#94a3b8;font-weight:500;">PR & PO signature tracking per activity</p>
+                            <p style="font-size:10px;color:#94a3b8;font-weight:500;">PR &amp; PO signature tracking per activity</p>
                         </div>
                     </div>
                 </div>
@@ -312,13 +411,13 @@ $totalObligatedAmount = 0;
                         <thead>
                             <tr class="th-primary">
                                 <th rowspan="2" style="text-align:left;min-width:160px;">Procurement</th>
-                                <th rowspan="2" style="min-width:130px;">Required Documents</th>
-                                <!-- Adjusted Colspan to 4 for PR signatures and 3 for PO Signatures based on db schema signatory_role -->
+                                <th rowspan="2" style="min-width:160px;">Required Documents</th>
                                 <th colspan="4" class="group-pr" style="text-align:center;border-left:2px solid rgba(255,255,255,0.15);">Status of Purchase Request (PR)</th>
                                 <th colspan="3" class="group-po" style="text-align:center;border-left:2px solid rgba(255,255,255,0.15);">Status of Purchase Order (PO)</th>
-                                <th rowspan="2" style="text-align:right;min-width:120px;">Amount Obligated</th>
-                                <th rowspan="2" style="text-align:right;min-width:120px;">Amount Unobligated</th>
+                                <th rowspan="2" style="text-align:right;min-width:130px;">Amt. Unobligated</th>
+                                <th rowspan="2" style="text-align:right;min-width:130px;">Amt. Obligated</th>
                                 <th rowspan="2" style="text-align:left;min-width:160px;">Remarks</th>
+                                <th rowspan="2" style="text-align:center;min-width:80px;">Actions</th>
                             </tr>
                             <tr class="th-secondary">
                                 <th class="sub-pr" style="min-width:80px;border-left:2px solid rgba(255,255,255,0.12);">Budget Officer<br>Signature</th>
@@ -332,61 +431,130 @@ $totalObligatedAmount = 0;
                         </thead>
                         <tbody>
                             <?php if (empty($procurements)): ?>
-                                <tr><td colspan="10" style="text-align:center;color:#94a3b8;padding:20px;">No procurement activities found.</td></tr>
+                                <tr><td colspan="13" style="text-align:center;color:#94a3b8;padding:20px;">No procurement activities found.</td></tr>
                             <?php else: ?>
-                                <?php foreach ($procurements as $p): 
-                                    $procBudget = (float)$p['unit_cost'] * (int)$p['quantity'];
-                                    $obligatedAmount = (float)($p['obligated_amount'] ?? 0);
-                                    if ($obligatedAmount == 0 && $procBudget > 0) { 
-                                        $obligatedAmount = $procBudget; // fallback if null
-                                    }
-                                    $totalObligatedAmount += $obligatedAmount;
-
-                                    $docs = $statusObj->getProcurementDocuments($p['procurementId'], $p['is_travelExpense']);
-                                    $sigs = $statusObj->getSignatures($p['procurementId']);
+                                <?php foreach ($procurements as $p):
+                                    $procBudget   = (float)($p['unit_cost'] ?? 0) * (int)($p['quantity'] ?? 0);
+                                    $isTravel     = (bool)$p['is_travelExpense'];
+                                    $isCancelled  = ($p['status'] === 'cancelled');
+                                    $isObligated  = ($p['status'] === 'obligated');
+                                    $docs = $statusObj->getProcurementDocuments($p['procurementId'], $isTravel);
+                                    $sigs = ($isTravel || $isCancelled) ? [] : $statusObj->getSignatures($p['procurementId']);
                                 ?>
-                                <tr>
+                                <tr data-proc-id="<?= (int)$p['procurementId'] ?>"
+                                    data-amount="<?= $procBudget ?>"
+                                    data-status="<?= htmlspecialchars($p['status']) ?>"
+                                    style="<?= $isCancelled ? 'opacity:0.55;background:#fafafa;' : '' ?>">
+
                                     <td>
                                         <p style="font-weight:700;color:#0f172a;font-size:12px;"><?= htmlspecialchars($p['pro_act'] ?? '—') ?></p>
                                         <p style="font-size:10px;color:#94a3b8;font-weight:500;margin-top:2px;">Object Code: <?= htmlspecialchars($p['object_code_str']) ?></p>
+                                        <?php if ($isTravel): ?>
+                                        <span style="display:inline-flex;align-items:center;gap:3px;margin-top:4px;padding:2px 7px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:9px;font-weight:700;color:#1d4ed8;">
+                                            ✈ Travel
+                                        </span>
+                                        <?php endif; ?>
                                     </td>
+
+                                    <!-- Required Documents -->
                                     <td>
                                         <div style="display:flex;flex-direction:column;gap:4px;">
                                             <?php if (empty($docs)): ?>
                                                 <span class="doc-badge missing">No Documents Set</span>
                                             <?php else: ?>
-                                                <?php foreach($docs as $doc): ?>
-                                                    <?php if($doc['is_checked'] == 1): ?>
-                                                        <span class="doc-badge checked">
-                                                            <svg width="10" height="10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                                <?php foreach ($docs as $doc): ?>
+                                                    <?php if ($isTravel): ?>
+                                                        <button class="doc-badge <?= $doc['is_checked'] ? 'checked' : 'missing' ?> doc-cb-btn"
+                                                                data-proc-id="<?= (int)$p['procurementId'] ?>"
+                                                                data-doc-id="<?= (int)$doc['documentId'] ?>"
+                                                                data-doc-name="<?= htmlspecialchars($doc['document_name']) ?>"
+                                                                data-state="<?= (int)$doc['is_checked'] ?>">
+                                                            <?php if ($doc['is_checked']): ?>
+                                                                <svg width="10" height="10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                                            <?php else: ?>
+                                                                <svg width="10" height="10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                                            <?php endif; ?>
                                                             <?= htmlspecialchars($doc['document_name']) ?>
-                                                        </span>
+                                                        </button>
                                                     <?php else: ?>
-                                                        <span class="doc-badge missing">
-                                                            <svg width="10" height="10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                                            <?= htmlspecialchars($doc['document_name']) ?> Pending
+                                                        <span class="doc-badge <?= $doc['is_checked'] ? 'checked' : 'missing' ?>">
+                                                            <?php if ($doc['is_checked']): ?>
+                                                                <svg width="10" height="10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                                            <?php else: ?>
+                                                                <svg width="10" height="10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                                            <?php endif; ?>
+                                                            <?= htmlspecialchars($doc['document_name']) ?>
                                                         </span>
                                                     <?php endif; ?>
                                                 <?php endforeach; ?>
                                             <?php endif; ?>
                                         </div>
                                     </td>
-                                    
-                                    <!-- Signatures (Dynamically Mapping the 7 signature roles) -->
-                                    <?php 
-                                        for ($i = 0; $i < 7; $i++) {
-                                            $state = isset($sigs[$i]) ? $sigs[$i]['is_signed'] : '0';
-                                            echo '<td><button class="sig-btn" data-state="'.$state.'" title="Toggle Status"><svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">'.($state == '1' ? '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>' : '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>').'</svg></button></td>';
-                                        }
-                                    ?>
-                                    
-                                    <td style="text-align:right;"><span style="font-weight:700;color:#16a34a;font-size:12px;">₱<?= number_format($obligatedAmount, 2) ?></span></td>
-                                    <td style="text-align:right;"><span style="font-weight:600;color:#475569;font-size:12px;">₱<?= number_format(max(0, $procBudget - $obligatedAmount), 2) ?></span></td>
-                                    
+
+                                    <!-- 7 Signature columns -->
+                                    <?php for ($i = 0; $i < 7; $i++): ?>
+                                        <?php if ($isTravel || $isCancelled): ?>
+                                            <td><span style="color:#cbd5e1;font-size:11px;">—</span></td>
+                                        <?php else:
+                                            $sig    = $sigs[$i] ?? null;
+                                            $state  = $sig ? (int)$sig['is_signed'] : 0;
+                                            $signId = $sig ? (int)$sig['signId'] : 0;
+                                        ?>
+                                            <td>
+                                                <button class="sig-btn"
+                                                        data-state="<?= $state ?>"
+                                                        data-proc-id="<?= (int)$p['procurementId'] ?>"
+                                                        data-sign-id="<?= $signId ?>"
+                                                        title="Toggle Status">
+                                                    <?php if ($state == 1): ?>
+                                                        <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+                                                    <?php else: ?>
+                                                        <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                                    <?php endif; ?>
+                                                </button>
+                                            </td>
+                                        <?php endif; ?>
+                                    <?php endfor; ?>
+
+                                    <!-- Amt. Unobligated (first) -->
+                                    <td class="cell-unobligated" style="text-align:right;">
+                                        <?php if ($isCancelled || $isObligated): ?>
+                                            <span style="color:#94a3b8;">—</span>
+                                        <?php else: ?>
+                                            <span style="font-weight:700;color:#d97706;font-size:12px;">₱<?= number_format($procBudget, 2) ?></span>
+                                        <?php endif; ?>
+                                    </td>
+
+                                    <!-- Amt. Obligated (second) -->
+                                    <td class="cell-obligated" style="text-align:right;">
+                                        <?php if ($isCancelled): ?>
+                                            <span style="color:#94a3b8;">—</span>
+                                        <?php elseif ($isObligated): ?>
+                                            <span style="font-weight:700;color:#16a34a;font-size:12px;">₱<?= number_format($procBudget, 2) ?></span>
+                                        <?php else: ?>
+                                            <span style="color:#94a3b8;">—</span>
+                                        <?php endif; ?>
+                                    </td>
+
                                     <td style="text-align:left;">
-                                        <div style="display:flex;align-items:center;gap:6px;min-width:130px;">
-                                            <span style="font-size:11px;color:#64748b;"><?= htmlspecialchars($p['remarks'] ?: 'No remarks.') ?></span>
-                                        </div>
+                                        <span style="font-size:11px;color:#64748b;"><?= htmlspecialchars($p['remarks'] ?: 'No remarks.') ?></span>
+                                    </td>
+
+                                    <!-- Actions -->
+                                    <td class="cell-actions" style="text-align:center;">
+                                        <?php if ($isCancelled): ?>
+                                            <span style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:#fee2e2;border:1px solid #fecaca;border-radius:5px;font-size:9px;font-weight:700;color:#dc2626;">
+                                                Cancelled
+                                            </span>
+                                        <?php else: ?>
+                                            <button class="cancel-btn"
+                                                    data-proc-id="<?= (int)$p['procurementId'] ?>"
+                                                    data-proc-name="<?= htmlspecialchars(addslashes($p['pro_act'] ?? '')) ?>"
+                                                    title="Cancel Procurement Activity"
+                                                    style="width:28px;height:28px;border-radius:7px;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:all 0.2s ease;">
+                                                <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>
+                                            </button>
+                                        <?php endif; ?>
                                     </td>
                                 </tr>
                                 <?php endforeach; ?>
@@ -404,7 +572,7 @@ $totalObligatedAmount = 0;
                     <div style="display:flex;align-items:center;justify-content:flex-end;gap:20px;padding-top:10px;border-top:1px solid #f1f5f9;">
                         <div style="text-align:right;">
                             <p style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px;">Total Obligated</p>
-                            <p style="font-size:15px;font-weight:900;color:#1d4ed8;letter-spacing:-0.02em;">₱<?= number_format($totalObligatedAmount, 2) ?></p>
+                            <p id="footer-total-obligated" style="font-size:15px;font-weight:900;color:#1d4ed8;letter-spacing:-0.02em;">₱<?= number_format($totalObligatedAmount, 2) ?></p>
                         </div>
                         <div style="width:1px;height:32px;background:#e2e8f0;"></div>
                         <div style="text-align:right;">
@@ -414,25 +582,213 @@ $totalObligatedAmount = 0;
                         <div style="width:1px;height:32px;background:#e2e8f0;"></div>
                         <div style="text-align:right;">
                             <p style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px;">Remaining Budget</p>
-                            <p style="font-size:15px;font-weight:900;color:#16a34a;letter-spacing:-0.02em;">₱<?= number_format($totalSaroBudget - $totalObligatedAmount, 2) ?></p>
+                            <p id="footer-remaining" style="font-size:15px;font-weight:900;color:#16a34a;letter-spacing:-0.02em;">₱<?= number_format($totalSaroBudget - $totalObligatedAmount, 2) ?></p>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
+</div>
     </main>
 </div>
 
-<script>
-    const checkSvg = `<svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>`;
-    const clockSvg = `<svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`;
+<!-- ══ Cancel Modal ══ -->
+<div id="cancelModal" style="display:none;position:fixed;inset:0;z-index:100;
+     background:rgba(15,23,42,0.55);backdrop-filter:blur(4px);
+     align-items:center;justify-content:center;padding:24px;">
+    <div style="background:#fff;border-radius:18px;width:100%;max-width:400px;
+                box-shadow:0 24px 64px rgba(0,0,0,0.18);overflow:hidden;">
+        <div style="padding:22px 28px;border-bottom:1px solid #f1f5f9;
+                    display:flex;align-items:center;justify-content:space-between;
+                    background:linear-gradient(135deg,#dc2626,#ef4444);">
+            <div>
+                <p style="font-size:10px;font-weight:700;color:rgba(255,255,255,0.5);
+                           text-transform:uppercase;letter-spacing:0.14em;margin-bottom:4px;">Confirmation</p>
+                <h3 style="font-size:16px;font-weight:900;color:#fff;">Cancel Activity</h3>
+            </div>
+            <button onclick="closeCancelModal()" style="width:32px;height:32px;border-radius:8px;
+                    background:rgba(255,255,255,0.12);border:none;cursor:pointer;
+                    display:flex;align-items:center;justify-content:center;color:#fff;">
+                <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+        <div style="padding:24px 28px;display:flex;flex-direction:column;gap:16px;text-align:center;">
+            <input type="hidden" id="cancel-proc-id">
+            <svg width="48" height="48" fill="none" stroke="#ef4444" viewBox="0 0 24 24" style="margin:0 auto;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <p style="font-size:14px;color:#334155;">Are you sure you want to cancel <strong id="cancel-proc-name"></strong>?</p>
+            <p style="font-size:12px;color:#94a3b8;">This action cannot be undone.</p>
+        </div>
+        <div style="padding:16px 28px;border-top:1px solid #f1f5f9;background:#fafbfe;
+                    display:flex;align-items:center;justify-content:flex-end;gap:10px;">
+            <button onclick="closeCancelModal()" style="padding:10px 16px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#64748b;font-size:12px;font-weight:700;cursor:pointer;">Keep Activity</button>
+            <button onclick="confirmCancel()" id="confirm-cancel-btn" style="padding:10px 16px;border-radius:10px;border:none;background:#ef4444;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Yes, Cancel it</button>
+        </div>
+    </div>
+</div>
 
+<script>
+    const checkSvg12 = `<svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>`;
+    const clockSvg12 = `<svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`;
+    const checkSvg10 = `<svg width="10" height="10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>`;
+    const clockSvg10 = `<svg width="10" height="10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`;
+    const saroBudget = <?= (float)$totalSaroBudget ?>;
+
+    function fmtMoney(n) {
+        return '₱' + Number(n).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    }
+
+    function updateRowAmounts(procId, status) {
+        const row = document.querySelector(`tr[data-proc-id="${procId}"]`);
+        if (!row) return;
+        row.dataset.status = status;
+        const amt = parseFloat(row.dataset.amount) || 0;
+        const fmt = fmtMoney(amt);
+
+        if (status === 'cancelled') {
+            row.querySelector('.cell-unobligated').innerHTML = '<span style="color:#94a3b8;">—</span>';
+            row.querySelector('.cell-obligated').innerHTML   = '<span style="color:#94a3b8;">—</span>';
+            row.style.opacity    = '0.55';
+            row.style.background = '#fafafa';
+            row.querySelectorAll('.sig-btn').forEach(b => { b.disabled = true; b.style.opacity = '0.35'; });
+            row.querySelectorAll('.doc-cb-btn').forEach(b => { b.disabled = true; b.style.opacity = '0.35'; });
+            const ac = row.querySelector('.cell-actions');
+            if (ac) ac.innerHTML = `<span style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:#fee2e2;border:1px solid #fecaca;border-radius:5px;font-size:9px;font-weight:700;color:#dc2626;">Cancelled</span>`;
+        } else {
+            const isObligated = status === 'obligated';
+            row.querySelector('.cell-unobligated').innerHTML = isObligated
+                ? '<span style="color:#94a3b8;">—</span>'
+                : `<span style="font-weight:700;color:#d97706;font-size:12px;">${fmt}</span>`;
+            row.querySelector('.cell-obligated').innerHTML = isObligated
+                ? `<span style="font-weight:700;color:#16a34a;font-size:12px;">${fmt}</span>`
+                : '<span style="color:#94a3b8;">—</span>';
+        }
+
+        refreshFooter();
+    }
+
+    function refreshFooter() {
+        let total = 0;
+        document.querySelectorAll('tbody tr[data-proc-id]').forEach(row => {
+            if (row.dataset.status === 'obligated') {
+                total += parseFloat(row.dataset.amount) || 0;
+            }
+        });
+        document.getElementById('footer-total-obligated').textContent = fmtMoney(total);
+        document.getElementById('footer-remaining').textContent = fmtMoney(saroBudget - total);
+    }
+
+    // Signature toggle (regular procurement)
     document.querySelectorAll('.sig-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const newState = this.dataset.state === '1' ? '0' : '1';
-            this.dataset.state = newState;
-            this.innerHTML = newState === '1' ? checkSvg : clockSvg;
-            // Optionally: Add AJAX call here to save signature status to database
+        btn.addEventListener('click', function () {
+            const procId   = this.dataset.procId;
+            const signId   = this.dataset.signId;
+            const curState = this.dataset.state;
+            this.disabled  = true;
+
+            fetch(window.location.href, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: new URLSearchParams({
+                    ajax_action:   'toggle_signature',
+                    procurementId: procId,
+                    signId:        signId,
+                    current_state: curState
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                this.disabled = false;
+                if (!data.success) return;
+                this.dataset.state = data.new_state;
+                this.innerHTML = data.new_state == 1 ? checkSvg12 : clockSvg12;
+                updateRowAmounts(procId, data.status);
+            })
+            .catch(() => { this.disabled = false; });
+        });
+    });
+
+    // Cancel procurement activity modal functions
+    function openCancelModal(procId, procName) {
+        document.getElementById('cancel-proc-id').value = procId;
+        document.getElementById('cancel-proc-name').textContent = procName;
+        document.getElementById('cancelModal').style.display = 'flex';
+    }
+    function closeCancelModal() {
+        document.getElementById('cancelModal').style.display = 'none';
+    }
+    document.getElementById('cancelModal').addEventListener('click', function(e) {
+        if (e.target === this) closeCancelModal();
+    });
+
+    function confirmCancel() {
+        const procId = document.getElementById('cancel-proc-id').value;
+        const btn = document.getElementById('confirm-cancel-btn');
+        btn.disabled = true;
+        btn.textContent = 'Cancelling...';
+
+        fetch(window.location.href, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: new URLSearchParams({ ajax_action: 'cancel_procurement', procurementId: procId })
+        })
+        .then(r => r.json())
+        .then(data => {
+            btn.disabled = false;
+            btn.textContent = 'Yes, Cancel it';
+            if (!data.success) { alert('Failed to cancel.'); return; }
+            closeCancelModal();
+            updateRowAmounts(procId, 'cancelled');
+        })
+        .catch(() => { 
+            btn.disabled = false; 
+            btn.textContent = 'Yes, Cancel it';
+        });
+    }
+
+    document.querySelectorAll('.cancel-btn').forEach(btn => {
+        btn.addEventListener('click', function () {
+            const procId   = this.dataset.procId;
+            const procName = this.dataset.procName;
+            openCancelModal(procId, procName);
+        });
+    });
+
+    // Travel document toggle
+    document.querySelectorAll('.doc-cb-btn').forEach(btn => {
+        btn.addEventListener('click', function () {
+            const procId   = this.dataset.procId;
+            const docId    = this.dataset.docId;
+            const docName  = this.dataset.docName;
+            const curState = this.dataset.state;
+            this.disabled  = true;
+
+            fetch(window.location.href, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: new URLSearchParams({
+                    ajax_action:   'toggle_travel_doc',
+                    procurementId: procId,
+                    documentId:    docId,
+                    current_state: curState
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                this.disabled = false;
+                if (!data.success) return;
+                this.dataset.state = data.new_state;
+                if (data.new_state == 1) {
+                    this.classList.remove('missing');
+                    this.classList.add('checked');
+                    this.innerHTML = checkSvg10 + docName;
+                } else {
+                    this.classList.remove('checked');
+                    this.classList.add('missing');
+                    this.innerHTML = clockSvg10 + docName;
+                }
+                updateRowAmounts(procId, data.status);
+            })
+            .catch(() => { this.disabled = false; });
         });
     });
 </script>

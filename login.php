@@ -49,6 +49,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['role']      = $user['role'];
                 $_SESSION['initials']  = strtoupper(substr($user['first_name'], 0, 1) . substr($user['last_name'], 0, 1));
 
+                // Audit log — wrapped separately so a logging failure never blocks login
+                try {
+                    $conn->prepare("
+                        INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address)
+                        VALUES (?, 'login', ?, 'user', ?, ?)
+                    ")->execute([
+                        $user['userId'],
+                        $user['role'] . ' logged in: ' . trim($user['first_name'] . ' ' . $user['last_name']),
+                        $user['userId'],
+                        $_SERVER['REMOTE_ADDR'] ?? null,
+                    ]);
+                } catch (Exception $logEx) {
+                    // Fail silently — login must always succeed
+                }
+
                 // Redirect based on role
                 $dest = ($user['roleId'] == 1) ? 'admin/dashboard.php' : 'saro/dashboard.php';
                 header('Location: ' . $dest);

@@ -11,6 +11,7 @@ $currentUserId = (int)$_SESSION['user_id'];
 $username  = $_SESSION['full_name'];
 $role      = $_SESSION['role'];
 $initials  = $_SESSION['initials'];
+$adminId   = $currentUserId;
 
 // ── Handle Create Account POST ─────────────────────────────
 $createSuccess     = false;
@@ -96,12 +97,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_user') {
     $delId = (int)($_POST['delete_user_id'] ?? 0);
     if ($delId && $delId !== $currentUserId) {
-        $pdo->prepare("DELETE FROM user WHERE userId = ?")->execute([$delId]);
-        $pdo->prepare("INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address) VALUES (?, 'delete', 'Deleted user account', 'user', ?, ?)")
-            ->execute([$currentUserId, $delId, $_SERVER['REMOTE_ADDR'] ?? null]);
+        try {
+            $pdo->prepare("DELETE FROM user WHERE userId = ?")->execute([$delId]);
+            $pdo->prepare("INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address) VALUES (?, 'delete', 'Deleted user account', 'user', ?, ?)")
+                ->execute([$currentUserId, $delId, $_SERVER['REMOTE_ADDR'] ?? null]);
+            header('Location: users.php?deleted=1'); exit;
+        } catch (PDOException $e) {
+            if ($e->getCode() === '23000') {
+                // User has linked records — deactivate instead of hard delete
+                $pdo->prepare("UPDATE user SET status='inactive' WHERE userId=?")->execute([$delId]);
+                $pdo->prepare("INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address) VALUES (?, 'edit', 'Deactivated user account (linked records exist)', 'user', ?, ?)")
+                    ->execute([$currentUserId, $delId, $_SERVER['REMOTE_ADDR'] ?? null]);
+                header('Location: users.php?deactivated=1'); exit;
+            }
+            throw $e;
+        }
     }
     header('Location: users.php'); exit;
 }
+
+$flashMsg  = '';
+$flashType = '';
+if (isset($_GET['deleted']))     { $flashMsg = 'User account has been permanently deleted.'; $flashType = 'red'; }
+if (isset($_GET['deactivated'])) { $flashMsg = 'User has linked records and cannot be fully deleted. The account has been deactivated instead.'; $flashType = 'amber'; }
 
 // ── Fetch dynamic data ───────────────────────────────
 $roles = $pdo->query("SELECT roleId, role FROM user_role ORDER BY roleId")->fetchAll();
@@ -123,7 +141,7 @@ $logsQuery = $pdo->query("
     SELECT a.*, u.first_name, u.last_name 
     FROM audit_logs a
     LEFT JOIN user u ON a.userId = u.userId
-    ORDER BY a.timestamp DESC 
+    ORDER BY a.created_at DESC
     LIMIT 50
 ");
 $logs = $logsQuery->fetchAll();
@@ -138,6 +156,12 @@ foreach($allUsers as $u) {
     if ($u['status'] === 'active') $activeCount++;
     else $inactiveCount++;
 }
+
+require_once __DIR__ . '/../class/notification.php';
+$notifObj      = new Notification();
+$notifications = $notifObj->getRecentActivity((int)$adminId, 10);
+$unreadCount   = $notifObj->countUnread($adminId);
+$pendingPwCount = $notifObj->countPendingPasswordRequests();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -376,10 +400,8 @@ foreach($allUsers as $u) {
                 <span class="breadcrumb-active">User Management</span>
             </div>
             <div class="topbar-right">
-                <div class="icon-btn">
-                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-                    <span class="notif-dot"></span>
-                </div>
+                <!-- Notification -->
+                <?php $isAdmin = true; $pendingPwCount = $pendingPwCount ?? 0; $approvedPwReq = $approvedPwReq ?? null; include __DIR__ . '/../includes/notif_dropdown.php'; ?>
                 <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
                     <div style="width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#dc2626,#b91c1c);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff;"><?= htmlspecialchars($initials) ?></div>
                     <div>
@@ -391,6 +413,15 @@ foreach($allUsers as $u) {
         </header>
 
         <div class="content">
+
+            <?php if ($flashMsg): ?>
+            <div style="display:flex;align-items:flex-start;gap:12px;padding:14px 18px;border-radius:12px;margin-bottom:16px;
+                background:<?= $flashType==='red' ? '#fef2f2' : '#fffbeb' ?>;
+                border:1px solid <?= $flashType==='red' ? '#fecaca' : '#fde68a' ?>;">
+                <svg width="16" height="16" fill="none" stroke="<?= $flashType==='red' ? '#dc2626' : '#d97706' ?>" viewBox="0 0 24 24" style="flex-shrink:0;margin-top:1px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                <p style="font-size:12px;font-weight:600;color:<?= $flashType==='red' ? '#991b1b' : '#92400e' ?>;line-height:1.5;"><?= htmlspecialchars($flashMsg) ?></p>
+            </div>
+            <?php endif; ?>
 
             <!-- Hero -->
             <div class="hero-banner">
@@ -799,7 +830,7 @@ foreach($allUsers as $u) {
                 <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:16px;display:flex;align-items:flex-start;gap:12px;">
                     <svg width="18" height="18" fill="none" stroke="#dc2626" viewBox="0 0 24 24" style="flex-shrink:0;margin-top:1px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
                     <p style="font-size:12px;color:#991b1b;font-weight:500;line-height:1.6;">
-                        Are you sure you want to permanently delete the account for <strong id="delete-user-name"></strong>? All associated records will be removed.
+                        Are you sure you want to delete the account for <strong id="delete-user-name"></strong>? If the user has linked records, the account will be deactivated instead of permanently removed.
                     </p>
                 </div>
             </div>

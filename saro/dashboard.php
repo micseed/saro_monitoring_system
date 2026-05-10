@@ -9,24 +9,34 @@ $db  = new Database();
 $pdo = $db->connect();
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
-$totalSaros     = (int)$pdo->query("SELECT COUNT(*) FROM saro")->fetchColumn();
-$totalBudget    = (float)$pdo->query("SELECT COALESCE(SUM(total_budget),0) FROM saro")->fetchColumn();
+require_once __DIR__ . '/../class/notification.php';
+
+$totalSaros     = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='active'")->fetchColumn();
+$totalBudget    = (float)$pdo->query("SELECT COALESCE(SUM(total_budget),0) FROM saro WHERE status='active'")->fetchColumn();
 $totalObligated = (float)$pdo->query("
     SELECT COALESCE(SUM(p.obligated_amount),0)
     FROM procurement p
     JOIN object_code o ON p.objectId = o.objectId
+    WHERE p.status = 'obligated'
 ")->fetchColumn();
 $unobligated = $totalBudget - $totalObligated;
 $utilRate    = $totalBudget > 0 ? round($totalObligated / $totalBudget * 100, 1) : 0;
+
+$notifObj      = new Notification();
+$notifications = $notifObj->getRecentActivity((int)$_SESSION['user_id'], 10);
+$unreadCount   = $notifObj->countUnread((int)$_SESSION['user_id']);
+$approvedPwReq = $notifObj->getApprovedPasswordNotification((int)$_SESSION['user_id']);
+$cancelledCount = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='cancelled'")->fetchColumn();
 
 $saros = $pdo->query("
     SELECT s.saroId, s.saroNo, s.saro_title, s.total_budget, s.status,
            COALESCE(SUM(p.obligated_amount),0) AS obligated
     FROM saro s
     LEFT JOIN object_code o ON o.saroId = s.saroId
-    LEFT JOIN procurement p ON p.objectId = o.objectId
+    LEFT JOIN procurement p ON p.objectId = o.objectId AND p.status = 'obligated'
+    WHERE s.status = 'active'
     GROUP BY s.saroId
-    ORDER BY s.created_at DESC
+    ORDER BY s.created_at ASC
 ")->fetchAll();
 
 $chartLabels    = json_encode(array_column($saros, 'saroNo'));
@@ -388,6 +398,14 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
             </a>
+            <p class="nav-section-label">History</p>
+            <a href="cancelled_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                Cancelled SAROs
+                <?php if ($cancelledCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#b45309;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $cancelledCount ?></span>
+                <?php endif; ?>
+            </a>
             <p class="nav-section-label">Account</p>
             <a href="settings.php" class="nav-item">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -424,10 +442,7 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
             </div>
             <div class="topbar-right">
                 <!-- Notification -->
-                <div class="icon-btn">
-                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-                    <span class="notif-dot"></span>
-                </div>
+                <?php $isAdmin = false; $pendingPwCount = $pendingPwCount ?? 0; $approvedPwReq = $approvedPwReq ?? null; include __DIR__ . '/../includes/notif_dropdown.php'; ?>
                 <!-- User chip -->
                 <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;
                             background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
@@ -495,7 +510,7 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
                         <div style="flex:1;min-width:0;">
                             <p class="stat-label">Total Obligated</p>
-                            <p class="stat-value">₱<?= number_format($totalObligated/1_000_000,2) ?></p>
+                            <p class="stat-value" style="font-size:20px;">₱<?= number_format($totalObligated,2) ?></p>
                             <div class="stat-meta">
                                 <div class="progress-bar">
                                     <div class="progress-fill" style="width:<?= $utilRate ?>%;background:linear-gradient(90deg,#2563eb,#60a5fa);"></div>
@@ -515,7 +530,7 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
                         <div style="flex:1;min-width:0;">
                             <p class="stat-label">Unobligated</p>
-                            <p class="stat-value" style="color:#b45309;">₱<?= number_format($unobligated/1_000_000,2) ?></p>
+                            <p class="stat-value" style="color:#b45309;font-size:20px;">₱<?= number_format($unobligated,2) ?></p>
                             <div class="stat-meta">
                                 <div class="progress-bar">
                                     <div class="progress-fill" style="width:<?= 100-$utilRate ?>%;background:linear-gradient(90deg,#f59e0b,#fcd34d);"></div>
@@ -554,14 +569,14 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                                 <span style="width:10px;height:10px;border-radius:3px;background:#2563eb;flex-shrink:0;display:inline-block;"></span>
                                 <span style="font-size:12px;color:#64748b;font-weight:500;">Obligated</span>
                             </div>
-                            <span style="font-size:12px;font-weight:700;color:#0f172a;">₱<?= number_format($totalObligated/1_000_000,2) ?></span>
+                            <span style="font-size:12px;font-weight:700;color:#0f172a;">₱<?= number_format($totalObligated,2) ?></span>
                         </div>
                         <div style="display:flex;align-items:center;justify-content:space-between;">
                             <div style="display:flex;align-items:center;gap:8px;">
                                 <span style="width:10px;height:10px;border-radius:3px;background:#e2e8f0;flex-shrink:0;display:inline-block;"></span>
                                 <span style="font-size:12px;color:#64748b;font-weight:500;">Unobligated</span>
                             </div>
-                            <span style="font-size:12px;font-weight:700;color:#0f172a;">₱<?= number_format($unobligated/1_000_000,2) ?></span>
+                            <span style="font-size:12px;font-weight:700;color:#0f172a;">₱<?= number_format($unobligated,2) ?></span>
                         </div>
                     </div>
                 </div>
@@ -584,8 +599,15 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                             </div>
                         </div>
                     </div>
-                    <div style="height:180px;">
-                        <canvas id="barChart"></canvas>
+                    <div style="height:180px;position:relative;">
+                        <?php if (empty($saros)): ?>
+                        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;">
+                            <svg width="32" height="32" fill="none" stroke="#cbd5e1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                            <p style="font-size:12px;font-weight:600;color:#94a3b8;">No SARO data available</p>
+                        </div>
+                        <?php else: ?>
+                        <canvas id="barChart" height="180"></canvas>
+                        <?php endif; ?>
                     </div>
                 </div>
 
@@ -714,11 +736,10 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
 </div>
 
 <style>
-    @keyframes pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.4; }
-    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 </style>
+<script>
+</script>
 
 <script>
     // Shared font defaults
@@ -751,7 +772,7 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
     });
 
     // ── Bar chart ──
-    new Chart(document.getElementById('barChart'), {
+    if (document.getElementById('barChart')) new Chart(document.getElementById('barChart'), {
         type: 'bar',
         data: {
             labels: <?= $chartLabels ?>,
@@ -794,7 +815,7 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                     ticks: {
                         color: '#94a3b8',
                         font: { weight: '600' },
-                        callback: v => '₱' + (v / 1000).toFixed(0) + 'k'
+                        callback: v => '₱' + Number(v).toLocaleString('en-US')
                     },
                     border: { display: false }
                 }

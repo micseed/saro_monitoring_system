@@ -1,25 +1,31 @@
 <?php
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../class/saro.php';
+require_once __DIR__ . '/../class/notification.php';
 
 $saroObj = new Saro();
-$userId  = $_SESSION['user_id'];
+$userId  = (int)$_SESSION['user_id'];
+
+// Auto-update obligated/lapsed statuses
+$saroObj->checkAndAutoUpdateStatus($userId);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
     $action = $_POST['action'];
 
     if ($action === 'add') {
-        $saroNo  = trim($_POST['saro_no']    ?? '');
-        $title   = trim($_POST['saro_title'] ?? '');
-        $year    = trim($_POST['fiscal_year'] ?? '');
-        $budget  = $_POST['total_budget'] ?? 0;
+        $saroNo  = trim($_POST['saro_no']       ?? '');
+        $title   = trim($_POST['saro_title']    ?? '');
+        $year    = trim($_POST['fiscal_year']   ?? '');
+        $budget  = $_POST['total_budget']       ?? 0;
         $codes   = json_decode($_POST['object_codes'] ?? '[]', true) ?: [];
+        $dateRel = trim($_POST['date_released'] ?? '') ?: null;
+        $validUntil = trim($_POST['valid_until'] ?? '') ?: null;
         if (!$saroNo || !$title || !$year || !$budget) {
             echo json_encode(['success' => false, 'error' => 'All fields are required.']);
             exit;
         }
-        echo json_encode($saroObj->createSaro($userId, $saroNo, $title, $year, $budget, $codes));
+        echo json_encode($saroObj->createSaro($userId, $saroNo, $title, $year, $budget, $codes, $dateRel, $validUntil));
         exit;
     }
 
@@ -30,18 +36,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $year   = trim($_POST['fiscal_year']  ?? '');
         $budget = $_POST['total_budget']      ?? 0;
         $status = $_POST['status']            ?? 'active';
+        $dateRel = trim($_POST['date_released'] ?? '') ?: null;
+        $validUntil = trim($_POST['valid_until'] ?? '') ?: null;
         if (!$id || !$saroNo || !$title || !$year) {
             echo json_encode(['success' => false, 'error' => 'All fields are required.']);
             exit;
         }
-        echo json_encode($saroObj->updateSaro($id, $saroNo, $title, $year, $budget, $status));
+        if (!$saroObj->isOwner($id, $userId)) {
+            echo json_encode(['success' => false, 'error' => 'You do not have permission to edit this SARO.']);
+            exit;
+        }
+        echo json_encode($saroObj->updateSaro($id, $saroNo, $title, $year, $budget, $status, $userId, $dateRel, $validUntil));
         exit;
     }
 
     if ($action === 'delete') {
-        $id = (int)($_POST['saro_id'] ?? 0);
+        $id     = (int)($_POST['saro_id'] ?? 0);
+        $saroNo = trim($_POST['saro_no'] ?? '');
         if (!$id) { echo json_encode(['success' => false, 'error' => 'Invalid ID.']); exit; }
-        echo json_encode($saroObj->deleteSaro($id));
+        if (!$saroObj->isOwner($id, $userId)) {
+            echo json_encode(['success' => false, 'error' => 'You do not have permission to delete this SARO.']);
+            exit;
+        }
+        echo json_encode($saroObj->deleteSaro($id, $userId, $saroNo));
+        exit;
+    }
+
+    if ($action === 'cancel') {
+        $id     = (int)($_POST['saro_id'] ?? 0);
+        $saroNo = trim($_POST['saro_no'] ?? '');
+        if (!$id) { echo json_encode(['success' => false, 'error' => 'Invalid ID.']); exit; }
+        if (!$saroObj->isOwner($id, $userId)) {
+            echo json_encode(['success' => false, 'error' => 'You do not have permission to cancel this SARO.']);
+            exit;
+        }
+        echo json_encode($saroObj->cancelSaro($id, $userId, $saroNo));
         exit;
     }
 
@@ -49,10 +78,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     exit;
 }
 
-$saros    = $saroObj->getAllSaros();
+$allSaros        = $saroObj->getAllSaros();
+// Only show 'active' SAROs in data entry (excluded: cancelled, obligated, lapsed, deleted)
+$activeSaros     = array_values(array_filter($allSaros, fn($s) => $s['status'] === 'active'));
+$cancelledCount  = count(array_filter($allSaros, fn($s) => $s['status'] === 'cancelled'));
+$obligatedCount  = count(array_filter($allSaros, fn($s) => $s['status'] === 'obligated'));
+$lapsedCount     = count(array_filter($allSaros, fn($s) => $s['status'] === 'lapsed'));
 $username = $_SESSION['full_name'];
 $role     = $_SESSION['role'];
 $initials = $_SESSION['initials'];
+
+$notifObj      = new Notification();
+$notifications = $notifObj->getRecentActivity((int)$_SESSION['user_id'], 10);
+$unreadCount   = $notifObj->countUnread($userId);
+$approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -281,6 +320,8 @@ $initials = $_SESSION['initials'];
         .action-btn-edit:hover { background: #f1f5f9; border-color: #e2e8f0; color: #0f172a; }
         .action-btn-del { color: #94a3b8; }
         .action-btn-del:hover { background: #fee2e2; border-color: #fecaca; color: #dc2626; }
+        .action-btn-cancel { color: #94a3b8; }
+        .action-btn-cancel:hover { background: #fef9c3; border-color: #fde68a; color: #b45309; }
 
         .panel-footer {
             padding: 14px 24px; border-top: 1px solid #f1f5f9; background: #fafbfe;
@@ -340,6 +381,28 @@ $initials = $_SESSION['initials'];
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
             </a>
+            <p class="nav-section-label">History</p>
+            <a href="cancelled_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                Cancelled SAROs
+                <?php if ($cancelledCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#b45309;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $cancelledCount ?></span>
+                <?php endif; ?>
+            </a>
+            <a href="obligated_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Obligated SAROs
+                <?php if ($obligatedCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#16a34a;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $obligatedCount ?></span>
+                <?php endif; ?>
+            </a>
+            <a href="lapsed_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Lapsed SAROs
+                <?php if ($lapsedCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#dc2626;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $lapsedCount ?></span>
+                <?php endif; ?>
+            </a>
             <p class="nav-section-label">Account</p>
             <a href="settings.php" class="nav-item">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -375,10 +438,8 @@ $initials = $_SESSION['initials'];
                 <span class="breadcrumb-active">Data Entry</span>
             </div>
             <div class="topbar-right">
-                <div class="icon-btn">
-                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-                    <span class="notif-dot"></span>
-                </div>
+                <!-- Notification -->
+                <?php $isAdmin = false; $pendingPwCount = $pendingPwCount ?? 0; $approvedPwReq = $approvedPwReq ?? null; include __DIR__ . '/../includes/notif_dropdown.php'; ?>
                 <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;
                             background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
                     <div style="width:28px;height:28px;border-radius:7px;
@@ -456,34 +517,39 @@ $initials = $_SESSION['initials'];
                                 <th>SARO Title</th>
                                 <th style="text-align:right;">Total Budget</th>
                                 <th style="text-align:center;">Object Codes</th>
+                                <th style="text-align:center;">Valid Until</th>
                                 <th style="text-align:center;">Status</th>
                                 <th style="text-align:center;">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php if (empty($saros)): ?>
+                            <?php if (empty($activeSaros)): ?>
                             <tr>
                                 <td colspan="7" style="text-align:center;padding:52px 20px;color:#94a3b8;">
                                     <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
                                         <svg width="40" height="40" fill="none" stroke="#cbd5e1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                                        <p style="font-size:13px;font-weight:600;color:#94a3b8;">No SARO records yet</p>
+                                        <p style="font-size:13px;font-weight:600;color:#94a3b8;">No active SARO records</p>
                                         <p style="font-size:12px;color:#cbd5e1;">Click <strong>Add SARO</strong> to create the first entry.</p>
                                     </div>
                                 </td>
                             </tr>
                             <?php else: ?>
-                            <?php foreach ($saros as $i => $s):
-                                $badgeClass = $s['status'] === 'active' ? 'badge-green' : 'badge-red';
-                                $rowNum     = str_pad($i + 1, 2, '0', STR_PAD_LEFT);
-                                $saroNoEsc  = htmlspecialchars($s['saroNo'], ENT_QUOTES);
-                                $titleEsc   = htmlspecialchars($s['saro_title']);
-                                $budgetFmt  = number_format((float)$s['total_budget'], 2);
-                                $codeCount  = (int)$s['obj_count'];
+                            <?php foreach ($activeSaros as $i => $s):
+                                $rowNum      = str_pad($i + 1, 2, '0', STR_PAD_LEFT);
+                                $saroNoEsc   = htmlspecialchars($s['saroNo'], ENT_QUOTES);
+                                $titleEsc    = htmlspecialchars($s['saro_title']);
+                                $budgetFmt   = number_format((float)$s['total_budget'], 2);
+                                $codeCount   = (int)$s['obj_count'];
+                                $validUntilFmt = $s['valid_until'] ? date('M d, Y', strtotime($s['valid_until'])) : '—';
+                                $isOwner     = ((int)$s['userId'] === $userId);
                             ?>
                             <tr>
                                 <td style="color:#cbd5e1;font-weight:700;font-size:12px;"><?= $rowNum ?></td>
                                 <td>
                                     <span style="font-weight:800;color:#0f172a;font-size:13px;letter-spacing:-0.01em;"><?= $saroNoEsc ?></span>
+                                    <?php if ($isOwner): ?>
+                                    <span style="font-size:9px;background:#eff6ff;color:#2563eb;border-radius:4px;padding:1px 5px;font-weight:700;margin-left:4px;">MINE</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td style="max-width:280px;">
                                     <p style="font-weight:500;color:#334155;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= $titleEsc ?></p>
@@ -497,27 +563,41 @@ $initials = $_SESSION['initials'];
                                     </span>
                                 </td>
                                 <td style="text-align:center;">
-                                    <span class="badge <?= $badgeClass ?>"><span class="badge-dot"></span><?= ucfirst($s['status']) ?></span>
+                                    <span style="font-size:11px;font-weight:600;color:#64748b;"><?= $validUntilFmt ?></span>
+                                </td>
+                                <td style="text-align:center;">
+                                    <span class="badge badge-green"><span class="badge-dot"></span>Active</span>
                                 </td>
                                 <td style="text-align:center;">
                                     <div style="display:flex;align-items:center;justify-content:center;gap:4px;">
                                         <a href="view_saro.php?id=<?= $s['saroId'] ?>" class="action-btn action-btn-view" title="View">
                                             <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
                                         </a>
+                                        <?php if ($isOwner): ?>
                                         <button class="action-btn action-btn-edit" title="Edit"
                                             data-id="<?= $s['saroId'] ?>"
                                             data-no="<?= $saroNoEsc ?>"
                                             data-title="<?= htmlspecialchars($s['saro_title'], ENT_QUOTES) ?>"
                                             data-year="<?= $s['fiscal_year'] ?>"
                                             data-budget="<?= $s['total_budget'] ?>"
-                                            data-status="<?= $s['status'] ?>">
+                                            data-status="<?= $s['status'] ?>"
+                                            data-released="<?= $s['date_released'] ?? '' ?>"
+                                            data-valid="<?= $s['valid_until'] ?? '' ?>">
                                             <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
                                         </button>
-                                        <button class="action-btn action-btn-del" title="Delete"
+                                        <button class="action-btn action-btn-cancel" title="Cancel SARO"
+                                            data-id="<?= $s['saroId'] ?>"
+                                            data-no="<?= $saroNoEsc ?>">
+                                            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                                        </button>
+                                        <button class="action-btn action-btn-del" title="Delete SARO"
                                             data-id="<?= $s['saroId'] ?>"
                                             data-no="<?= $saroNoEsc ?>">
                                             <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                                         </button>
+                                        <?php else: ?>
+                                        <span style="font-size:10px;color:#cbd5e1;font-style:italic;padding:4px 8px;">View only</span>
+                                        <?php endif; ?>
                                     </div>
                                 </td>
                             </tr>
@@ -538,11 +618,12 @@ $initials = $_SESSION['initials'];
                         </select>
                     </div>
                     <p style="font-size:11px;color:#94a3b8;font-weight:500;">
-                        Displaying <strong style="color:#475569;"><?= count($saros) ?></strong> of <strong style="color:#475569;"><?= count($saros) ?></strong> SARO entries
+                        Displaying <strong style="color:#475569;"><?= count($activeSaros) ?></strong> of <strong style="color:#475569;"><?= count($activeSaros) ?></strong> active SARO entries
                     </p>
                 </div>
 
             </div>
+
         </div><!-- /content -->
     </main>
 </div>
@@ -591,6 +672,17 @@ $initials = $_SESSION['initials'];
                 <input type="number" class="form-input" id="add-fiscal-year" placeholder="e.g. 2026" min="2020" max="2099">
             </div>
 
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div>
+                    <label class="form-label">Date Released</label>
+                    <input type="date" class="form-input" id="add-date-released">
+                </div>
+                <div>
+                    <label class="form-label">Valid Until</label>
+                    <input type="date" class="form-input" id="add-valid-until">
+                </div>
+            </div>
+
             <div>
                 <label class="form-label">Total Budget (₱)</label>
                 <input type="number" class="form-input" id="add-total-budget" placeholder="0.00" min="0" step="0.01">
@@ -613,12 +705,13 @@ $initials = $_SESSION['initials'];
                 </div>
 
                 <!-- Header row -->
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr 32px;gap:8px;
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr 56px 32px;gap:8px;
                             padding:6px 10px;background:#f8fafc;border:1px solid #e8edf5;
                             border-radius:8px 8px 0 0;border-bottom:none;">
                     <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Object Code</p>
                     <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Expense Items</p>
                     <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Projected Cost (₱)</p>
+                    <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;text-align:center;">Travel?</p>
                     <span></span>
                 </div>
 
@@ -684,6 +777,16 @@ $initials = $_SESSION['initials'];
                 <label class="form-label">Total Budget (₱)</label>
                 <input type="number" class="form-input" id="edit-total-budget" min="0" step="0.01">
             </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div>
+                    <label class="form-label">Date Released</label>
+                    <input type="date" class="form-input" id="edit-date-released">
+                </div>
+                <div>
+                    <label class="form-label">Valid Until</label>
+                    <input type="date" class="form-input" id="edit-valid-until">
+                </div>
+            </div>
             <div>
                 <label class="form-label">Status</label>
                 <select class="form-input" id="edit-status">
@@ -705,15 +808,51 @@ $initials = $_SESSION['initials'];
     </div>
 </div>
 
+
+
+<!-- ══ Cancel SARO Modal ══ -->
+<div id="cancelSaroModal" style="display:none;position:fixed;inset:0;z-index:100;
+     background:rgba(15,23,42,0.55);backdrop-filter:blur(4px);
+     align-items:center;justify-content:center;padding:24px;">
+    <div style="background:#fff;border-radius:18px;width:100%;max-width:400px;
+                box-shadow:0 24px 64px rgba(0,0,0,0.18);overflow:hidden;">
+        <input type="hidden" id="cancel-saro-id">
+        <input type="hidden" id="cancel-saro-no-val">
+        <div style="padding:32px 28px 24px;display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;">
+            <div style="width:56px;height:56px;border-radius:50%;background:#fef9c3;border:1px solid #fde68a;
+                        display:flex;align-items:center;justify-content:center;color:#b45309;">
+                <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+            </div>
+            <div>
+                <h3 style="font-size:16px;font-weight:800;color:#0f172a;margin-bottom:8px;">Cancel SARO</h3>
+                <p style="font-size:13px;color:#64748b;line-height:1.6;">
+                    Are you sure you want to cancel <strong id="cancel-saro-label" style="color:#0f172a;"></strong>?
+                    This will mark the SARO as cancelled and it will be moved to the History section.
+                </p>
+            </div>
+        </div>
+        <div style="padding:16px 28px;border-top:1px solid #f1f5f9;background:#fafbfe;
+                    display:flex;align-items:center;justify-content:flex-end;gap:10px;">
+            <button class="btn btn-ghost" onclick="closeCancelSaroModal()">Go Back</button>
+            <button class="btn btn-primary" id="confirmCancelBtn"
+                    style="background:#b45309;border-color:#b45309;"
+                    onmouseover="this.style.background='#92400e';this.style.borderColor='#92400e'"
+                    onmouseout="this.style.background='#b45309';this.style.borderColor='#b45309'">
+                <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                Confirm Cancel
+            </button>
+        </div>
+    </div>
+</div>
+
 <!-- ══ Delete SARO Modal ══ -->
 <div id="deleteSaroModal" style="display:none;position:fixed;inset:0;z-index:100;
      background:rgba(15,23,42,0.55);backdrop-filter:blur(4px);
      align-items:center;justify-content:center;padding:24px;">
     <div style="background:#fff;border-radius:18px;width:100%;max-width:400px;
                 box-shadow:0 24px 64px rgba(0,0,0,0.18);overflow:hidden;">
-
-        <!-- Modal body -->
         <input type="hidden" id="delete-saro-id">
+        <input type="hidden" id="delete-saro-no-val">
         <div style="padding:32px 28px 24px;display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;">
             <div style="width:56px;height:56px;border-radius:50%;background:#fee2e2;border:1px solid #fecaca;
                         display:flex;align-items:center;justify-content:center;color:#dc2626;">
@@ -723,20 +862,19 @@ $initials = $_SESSION['initials'];
                 <h3 style="font-size:16px;font-weight:800;color:#0f172a;margin-bottom:8px;">Delete SARO</h3>
                 <p style="font-size:13px;color:#64748b;line-height:1.6;">
                     Are you sure you want to delete <strong id="delete-saro-label" style="color:#0f172a;"></strong>?
-                    This action cannot be undone and will remove all associated object codes and procurement activities.
+                    This action will permanently mark the SARO as deleted.
                 </p>
             </div>
         </div>
-
-        <!-- Modal footer -->
         <div style="padding:16px 28px;border-top:1px solid #f1f5f9;background:#fafbfe;
                     display:flex;align-items:center;justify-content:flex-end;gap:10px;">
-            <button class="btn btn-ghost" onclick="closeDeleteSaroModal()">Cancel</button>
-            <button class="btn btn-primary" style="background:#dc2626;border-color:#dc2626;"
+            <button class="btn btn-ghost" onclick="closeDeleteSaroModal()">Go Back</button>
+            <button class="btn btn-primary" id="confirmDeleteBtn"
+                    style="background:#dc2626;border-color:#dc2626;"
                     onmouseover="this.style.background='#b91c1c';this.style.borderColor='#b91c1c'"
                     onmouseout="this.style.background='#dc2626';this.style.borderColor='#dc2626'">
                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                Delete Permanently
+                Confirm Delete
             </button>
         </div>
     </div>
@@ -749,68 +887,96 @@ $initials = $_SESSION['initials'];
         if (e.target === this) closeAddSaroModal();
     });
 
-    function openEditSaroModal(saroNo, title, year, budget, status) {
-        document.getElementById('edit-saro-no').value    = saroNo;
-        document.getElementById('edit-saro-title').value = title;
-        document.getElementById('edit-fiscal-year').value = year;
-        document.getElementById('edit-total-budget').value = budget;
-        document.getElementById('edit-status').value     = status;
-        document.getElementById('editSaroModal').style.display = 'flex';
-    }
     function closeEditSaroModal() { document.getElementById('editSaroModal').style.display = 'none'; }
     document.getElementById('editSaroModal').addEventListener('click', function(e) {
         if (e.target === this) closeEditSaroModal();
     });
 
-    function openDeleteSaroModal(saroNo) {
-        document.getElementById('delete-saro-label').textContent = saroNo;
-        document.getElementById('deleteSaroModal').style.display = 'flex';
-    }
-    function closeDeleteSaroModal() { document.getElementById('deleteSaroModal').style.display = 'none'; }
-    document.getElementById('deleteSaroModal').addEventListener('click', function(e) {
-        if (e.target === this) closeDeleteSaroModal();
-    });
-
-    // Wire edit/delete buttons from data attributes set by PHP
+    // Wire edit buttons
     document.querySelectorAll('.action-btn-edit').forEach(btn => {
         btn.onclick = () => {
-            document.getElementById('edit-saro-id').value     = btn.dataset.id;
-            document.getElementById('edit-saro-no').value     = btn.dataset.no;
-            document.getElementById('edit-saro-title').value  = btn.dataset.title;
-            document.getElementById('edit-fiscal-year').value = btn.dataset.year;
-            document.getElementById('edit-total-budget').value = btn.dataset.budget;
-            document.getElementById('edit-status').value      = btn.dataset.status;
+            document.getElementById('edit-saro-id').value          = btn.dataset.id;
+            document.getElementById('edit-saro-no').value          = btn.dataset.no;
+            document.getElementById('edit-saro-title').value       = btn.dataset.title;
+            document.getElementById('edit-fiscal-year').value      = btn.dataset.year;
+            document.getElementById('edit-total-budget').value     = btn.dataset.budget;
+            document.getElementById('edit-status').value           = btn.dataset.status;
+            document.getElementById('edit-date-released').value    = btn.dataset.released || '';
+            document.getElementById('edit-valid-until').value      = btn.dataset.valid    || '';
             document.getElementById('editSaroModal').style.display = 'flex';
         };
     });
+
+    // Wire cancel buttons
+    document.querySelectorAll('.action-btn-cancel').forEach(btn => {
+        btn.onclick = () => {
+            document.getElementById('cancel-saro-id').value         = btn.dataset.id;
+            document.getElementById('cancel-saro-no-val').value     = btn.dataset.no;
+            document.getElementById('cancel-saro-label').textContent = btn.dataset.no;
+            document.getElementById('cancelSaroModal').style.display = 'flex';
+        };
+    });
+
+    function closeCancelSaroModal() { document.getElementById('cancelSaroModal').style.display = 'none'; }
+    document.getElementById('cancelSaroModal').addEventListener('click', function(e) {
+        if (e.target === this) closeCancelSaroModal();
+    });
+    document.getElementById('confirmCancelBtn').onclick = function() { submitCancelSaro(); };
+
+    function submitCancelSaro() {
+        const fd = new FormData();
+        fd.append('action',  'cancel');
+        fd.append('saro_id', document.getElementById('cancel-saro-id').value);
+        fd.append('saro_no', document.getElementById('cancel-saro-no-val').value);
+        fetch('data_entry.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(res => { if (res.success) location.reload(); else alert(res.error || 'Error cancelling SARO.'); });
+    }
+
+    // Wire delete buttons
     document.querySelectorAll('.action-btn-del').forEach(btn => {
         btn.onclick = () => {
-            document.getElementById('delete-saro-id').value = btn.dataset.id;
+            document.getElementById('delete-saro-id').value          = btn.dataset.id;
+            document.getElementById('delete-saro-no-val').value      = btn.dataset.no;
             document.getElementById('delete-saro-label').textContent = btn.dataset.no;
             document.getElementById('deleteSaroModal').style.display = 'flex';
         };
     });
 
-    // Wire the permanent delete button inside the delete modal
-    document.querySelector('#deleteSaroModal .btn-primary').onclick = function() {
-        submitDeleteSaro();
-    };
+    function closeDeleteSaroModal() { document.getElementById('deleteSaroModal').style.display = 'none'; }
+    document.getElementById('deleteSaroModal').addEventListener('click', function(e) {
+        if (e.target === this) closeDeleteSaroModal();
+    });
+    document.getElementById('confirmDeleteBtn').onclick = function() { submitDeleteSaro(); };
+
+    function submitDeleteSaro() {
+        const fd = new FormData();
+        fd.append('action',  'delete');
+        fd.append('saro_id', document.getElementById('delete-saro-id').value);
+        fd.append('saro_no', document.getElementById('delete-saro-no-val').value);
+        fetch('data_entry.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(res => { if (res.success) location.reload(); else alert(res.error || 'Error deleting SARO.'); });
+    }
 
     function submitAddSaro() {
         const codes = [];
         document.querySelectorAll('#objCodeList > div').forEach(row => {
-            const inputs = row.querySelectorAll('input');
+            const inputs = row.querySelectorAll('input[type=text], input[type=number]');
+            const cb     = row.querySelector('.obj-travel-cb');
             if (inputs[0] && inputs[0].value.trim()) {
-                codes.push({ code: inputs[0].value.trim(), item: inputs[1] ? inputs[1].value.trim() : '', cost: inputs[2] ? inputs[2].value : 0 });
+                codes.push({ code: inputs[0].value.trim(), item: inputs[1] ? inputs[1].value.trim() : '', cost: inputs[2] ? inputs[2].value : 0, is_travel: cb && cb.checked ? 1 : 0 });
             }
         });
         const fd = new FormData();
-        fd.append('action', 'add');
-        fd.append('saro_no',      document.getElementById('add-saro-no').value.trim());
-        fd.append('saro_title',   document.getElementById('add-saro-title').value.trim());
-        fd.append('fiscal_year',  document.getElementById('add-fiscal-year').value.trim());
-        fd.append('total_budget', document.getElementById('add-total-budget').value);
-        fd.append('object_codes', JSON.stringify(codes));
+        fd.append('action',         'add');
+        fd.append('saro_no',        document.getElementById('add-saro-no').value.trim());
+        fd.append('saro_title',     document.getElementById('add-saro-title').value.trim());
+        fd.append('fiscal_year',    document.getElementById('add-fiscal-year').value.trim());
+        fd.append('total_budget',   document.getElementById('add-total-budget').value);
+        fd.append('date_released',  document.getElementById('add-date-released').value);
+        fd.append('valid_until',    document.getElementById('add-valid-until').value);
+        fd.append('object_codes',   JSON.stringify(codes));
         fetch('data_entry.php', { method: 'POST', body: fd })
             .then(r => r.json())
             .then(res => { if (res.success) location.reload(); else alert(res.error || 'Error adding SARO.'); });
@@ -818,25 +984,18 @@ $initials = $_SESSION['initials'];
 
     function submitEditSaro() {
         const fd = new FormData();
-        fd.append('action',       'edit');
-        fd.append('saro_id',      document.getElementById('edit-saro-id').value);
-        fd.append('saro_no',      document.getElementById('edit-saro-no').value.trim());
-        fd.append('saro_title',   document.getElementById('edit-saro-title').value.trim());
-        fd.append('fiscal_year',  document.getElementById('edit-fiscal-year').value.trim());
-        fd.append('total_budget', document.getElementById('edit-total-budget').value);
-        fd.append('status',       document.getElementById('edit-status').value);
+        fd.append('action',         'edit');
+        fd.append('saro_id',        document.getElementById('edit-saro-id').value);
+        fd.append('saro_no',        document.getElementById('edit-saro-no').value.trim());
+        fd.append('saro_title',     document.getElementById('edit-saro-title').value.trim());
+        fd.append('fiscal_year',    document.getElementById('edit-fiscal-year').value.trim());
+        fd.append('total_budget',   document.getElementById('edit-total-budget').value);
+        fd.append('status',         document.getElementById('edit-status').value);
+        fd.append('date_released',  document.getElementById('edit-date-released').value);
+        fd.append('valid_until',    document.getElementById('edit-valid-until').value);
         fetch('data_entry.php', { method: 'POST', body: fd })
             .then(r => r.json())
             .then(res => { if (res.success) location.reload(); else alert(res.error || 'Error updating SARO.'); });
-    }
-
-    function submitDeleteSaro() {
-        const fd = new FormData();
-        fd.append('action',  'delete');
-        fd.append('saro_id', document.getElementById('delete-saro-id').value);
-        fetch('data_entry.php', { method: 'POST', body: fd })
-            .then(r => r.json())
-            .then(res => { if (res.success) location.reload(); else alert(res.error || 'Error deleting SARO.'); });
     }
 
     function addObjRow() {
@@ -844,7 +1003,7 @@ $initials = $_SESSION['initials'];
         const hint  = document.getElementById('objEmptyHint');
         if (hint) hint.style.display = 'none';
         const row = document.createElement('div');
-        row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr 32px;gap:8px;' +
+        row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr 56px 32px;gap:8px;' +
                             'padding:8px 10px;border-bottom:1px solid #f1f5f9;align-items:center;' +
                             'background:#fff;transition:background 0.15s ease;';
         row.onmouseenter = () => row.style.background = '#f5f8ff';
@@ -868,6 +1027,10 @@ $initials = $_SESSION['initials'];
                           background:#f8fafc;outline:none;transition:all 0.2s ease;"
                    onfocus="this.style.borderColor='#3b82f6';this.style.background='#fff';this.style.boxShadow='0 0 0 3px rgba(59,130,246,0.1)'"
                    onblur="this.style.borderColor='#e2e8f0';this.style.background='#f8fafc';this.style.boxShadow='none'">
+            <div style="display:flex;align-items:center;justify-content:center;">
+                <input type="checkbox" class="obj-travel-cb"
+                       style="width:16px;height:16px;accent-color:#3b82f6;cursor:pointer;">
+            </div>
             <button type="button" onclick="removeObjRow(this)"
                     title="Remove row"
                     style="width:28px;height:28px;border-radius:6px;border:1px solid transparent;

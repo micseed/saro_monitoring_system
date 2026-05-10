@@ -2,18 +2,200 @@
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
-
 require_once __DIR__ . '/../includes/auth.php';
-// Assuming Database.php is located in a classes or similar directory based on your references. 
-// Adjust the path if necessary.
-require_once __DIR__ . '/../class/Database.php'; 
+require_once __DIR__ . '/../class/Database.php';
+require_once __DIR__ . '/../class/saro.php';
+require_once __DIR__ . '/../class/procurement.php';
+require_once __DIR__ . '/../class/notification.php';
+
+// ── AJAX handler ─────────────────────────────────────────────────────────────
+if (!empty($_POST['ajax_action'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $db     = new Database();
+    $conn   = $db->connect();
+    $saroId = (int)($_POST['saroId'] ?? 0);
+    $userId = (int)($_SESSION['user_id'] ?? 0);
+
+    switch ($_POST['ajax_action']) {
+
+        case 'add_procurement': {
+            $psm = $_POST['period_start_month'] ?? '';
+            $psy = $_POST['period_start_year']  ?? '';
+            $pem = $_POST['period_end_month']   ?? '';
+            $pey = $_POST['period_end_year']    ?? '';
+            $periodStart = ($psm && $psy) ? date('Y-m-01', strtotime("$psm $psy")) : null;
+            $periodEnd   = ($pem && $pey) ? date('Y-m-t',  strtotime("$pem $pey")) : null;
+            $isTravel    = (int)($_POST['is_travelExpense'] ?? 0);
+            $qty         = max(1, (int)($_POST['quantity']  ?? 1));
+            $unitCost    = (float)($_POST['unit_cost']      ?? 0);
+            $proActName  = trim($_POST['pro_act'] ?? '');
+
+            $stmt = $conn->prepare("
+                INSERT INTO procurement
+                    (objectId, userId, pro_act, is_travelExpense, quantity, unit, unit_cost,
+                     obligated_amount, period_start, period_end, proc_date, remarks, status)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ");
+            $stmt->execute([
+                (int)$_POST['objectId'], $userId,
+                $proActName, $isTravel, $qty,
+                $_POST['unit'] ?: null, $unitCost, $unitCost * $qty,
+                $periodStart, $periodEnd,
+                $_POST['proc_date'] ?: null,
+                $_POST['remarks']   ?: null,
+                'on_process',
+            ]);
+            $newProcId = (int)$conn->lastInsertId();
+
+            // Audit log: procurement activity created
+            $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+            $logDetails = 'Created procurement activity' . ($proActName ? ': ' . $proActName : '') . ' (SARO ID: ' . $saroId . ')';
+            $conn->prepare("INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address) VALUES (?, 'create', ?, 'procurement', ?, ?)")
+                 ->execute([$userId, $logDetails, $newProcId, $ip]);
+
+            echo json_encode(['success' => true]);
+            break;
+        }
+
+        case 'edit_procurement': {
+            $procId = (int)($_POST['procurementId'] ?? 0);
+            $psm = $_POST['period_start_month'] ?? ''; $psy = $_POST['period_start_year'] ?? '';
+            $pem = $_POST['period_end_month']   ?? ''; $pey = $_POST['period_end_year']   ?? '';
+            $periodStart = ($psm && $psy) ? date('Y-m-01', strtotime("$psm $psy")) : null;
+            $periodEnd   = ($pem && $pey) ? date('Y-m-t',  strtotime("$pem $pey")) : null;
+            $qty = max(1,(int)($_POST['quantity'] ?? 1)); $unitCost = (float)($_POST['unit_cost'] ?? 0);
+            $editProActName = trim($_POST['pro_act'] ?? '');
+            $conn->prepare("UPDATE procurement SET pro_act=?,quantity=?,unit=?,unit_cost=?,obligated_amount=?,period_start=?,period_end=?,proc_date=?,remarks=? WHERE procurementId=?")
+                 ->execute([$editProActName,$qty,$_POST['unit']?:null,$unitCost,$unitCost*$qty,$periodStart,$periodEnd,$_POST['proc_date']?:null,$_POST['remarks']?:null,$procId]);
+
+            // Audit log: procurement activity edited
+            $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+            $editDetails = 'Edited procurement activity' . ($editProActName ? ': ' . $editProActName : '') . ' (SARO ID: ' . $saroId . ')';
+            $conn->prepare("INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address) VALUES (?, 'edit', ?, 'procurement', ?, ?)")
+                 ->execute([$userId, $editDetails, $procId, $ip]);
+
+            echo json_encode(['success' => true]);
+            break;
+        }
+
+        case 'edit_remarks': {
+            $procId  = (int)($_POST['procurementId'] ?? 0);
+            $remarks = trim($_POST['remarks'] ?? '') ?: null;
+            $conn->prepare("UPDATE procurement SET remarks=? WHERE procurementId=?")
+                 ->execute([$remarks, $procId]);
+            echo json_encode(['success' => true]);
+            break;
+        }
+
+        case 'delete_procurement': {
+            $delProcId = (int)($_POST['procurementId'] ?? 0);
+            // Fetch name before deleting for the audit message
+            $delStmt = $conn->prepare("SELECT pro_act FROM procurement WHERE procurementId=?");
+            $delStmt->execute([$delProcId]);
+            $delRow = $delStmt->fetch(PDO::FETCH_ASSOC);
+            $delProActName = $delRow['pro_act'] ?? '';
+
+            $conn->prepare("DELETE FROM procurement WHERE procurementId=?")->execute([$delProcId]);
+
+            // Audit log: procurement activity deleted
+            $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+            $delDetails = 'Deleted procurement activity' . ($delProActName ? ': ' . $delProActName : '') . ' (SARO ID: ' . $saroId . ')';
+            $conn->prepare("INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address) VALUES (?, 'delete', ?, 'procurement', ?, ?)")
+                 ->execute([$userId, $delDetails, $delProcId, $ip]);
+
+            echo json_encode(['success' => true]);
+            break;
+        }
+
+        case 'edit_saro': {
+            $conn->prepare("UPDATE saro SET saro_title=?,fiscal_year=?,total_budget=?,status=? WHERE saroId=?")
+                 ->execute([trim($_POST['saro_title']??''), (int)($_POST['fiscal_year']??0), (float)($_POST['total_budget']??0), $_POST['status']??'active', $saroId]);
+            echo json_encode(['success' => true]);
+            break;
+        }
+
+        case 'add_object_codes': {
+            $items = json_decode($_POST['items'] ?? '[]', true);
+            if (!$saroId || empty($items)) { echo json_encode(['success'=>false,'error'=>'No data']); break; }
+            $stO = $conn->prepare("INSERT INTO object_code (saroId,code,projected_cost,is_travelExpense) VALUES (?,?,?,?)");
+            $stI = $conn->prepare("INSERT INTO expense_items (objectId,item_name) VALUES (?,?)");
+            $conn->beginTransaction();
+            $addedCodes = [];
+            $lastObjId  = null;
+            try {
+                foreach ($items as $it) {
+                    if (empty(trim($it['code']??''))) continue;
+                    $stO->execute([$saroId, trim($it['code']), (float)($it['cost']??0), (int)($it['is_travel']??0)]);
+                    $nId = $conn->lastInsertId();
+                    $lastObjId = $nId;
+                    $addedCodes[] = trim($it['code']);
+                    if (!empty(trim($it['expense_item']??''))) $stI->execute([$nId, trim($it['expense_item'])]);
+                }
+                $conn->commit();
+
+                // Audit log: object code(s) added
+                if (!empty($addedCodes)) {
+                    $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+                    $codeList = implode(', ', $addedCodes);
+                    $addObjDetails = 'Added object code(s): ' . $codeList . ' (SARO ID: ' . $saroId . ')';
+                    $conn->prepare("INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address) VALUES (?, 'create', ?, 'object_code', ?, ?)")
+                         ->execute([$userId, $addObjDetails, $lastObjId, $ip]);
+                }
+
+                echo json_encode(['success'=>true]);
+            } catch (Exception $e) { $conn->rollBack(); echo json_encode(['success'=>false,'error'=>$e->getMessage()]); }
+            break;
+        }
+
+        case 'edit_object_code': {
+            $oid     = (int)($_POST['objectId']??0);
+            $newCode = trim($_POST['code']??'');
+            $conn->prepare("UPDATE object_code SET code=?,projected_cost=? WHERE objectId=?")->execute([$newCode, (float)($_POST['projected_cost']??0), $oid]);
+            $conn->prepare("DELETE FROM expense_items WHERE objectId=?")->execute([$oid]);
+            if (!empty(trim($_POST['expense_item']??''))) $conn->prepare("INSERT INTO expense_items (objectId,item_name) VALUES (?,?)")->execute([$oid, trim($_POST['expense_item'])]);
+
+            // Audit log: object code edited
+            $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+            $editObjDetails = 'Edited object code' . ($newCode ? ': ' . $newCode : '') . ' (SARO ID: ' . $saroId . ')';
+            $conn->prepare("INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address) VALUES (?, 'edit', ?, 'object_code', ?, ?)")
+                 ->execute([$userId, $editObjDetails, $oid, $ip]);
+
+            echo json_encode(['success'=>true]);
+            break;
+        }
+
+        case 'delete_object_code': {
+            $delOid = (int)($_POST['objectId']??0);
+            // Fetch code before deleting for the audit message
+            $delObjStmt = $conn->prepare("SELECT code FROM object_code WHERE objectId=?");
+            $delObjStmt->execute([$delOid]);
+            $delObjRow  = $delObjStmt->fetch(PDO::FETCH_ASSOC);
+            $delObjCode = $delObjRow['code'] ?? '';
+
+            $conn->prepare("DELETE FROM object_code WHERE objectId=?")->execute([$delOid]);
+
+            // Audit log: object code deleted
+            $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+            $delObjDetails = 'Deleted object code' . ($delObjCode ? ': ' . $delObjCode : '') . ' (SARO ID: ' . $saroId . ')';
+            $conn->prepare("INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address) VALUES (?, 'delete', ?, 'object_code', ?, ?)")
+                 ->execute([$userId, $delObjDetails, $delOid, $ip]);
+
+            echo json_encode(['success'=>true]);
+            break;
+        }
+
+        default:
+            echo json_encode(['success'=>false,'error'=>'Unknown action']);
+    }
+    exit;
+}
+// ── End AJAX handler ──────────────────────────────────────────────────────────
 
 $username = $_SESSION['full_name'] ?? 'User';
 $role     = $_SESSION['role'] ?? 'Role';
 $initials = $_SESSION['initials'] ?? 'U';
 
-// Initialize Database connection
-$db = new Database();
+$db   = new Database();
 $conn = $db->connect();
 
 // Get the SARO ID from the URL parameter
@@ -36,14 +218,35 @@ if (!$saro) {
 
 // 2. Fetch Object Codes and related expense items
 $stmtObj = $conn->prepare("
-    SELECT oc.*, GROUP_CONCAT(ei.item_name SEPARATOR ', ') as expense_items
+    SELECT oc.objectId, oc.code, oc.projected_cost,
+           COALESCE(oc.is_travelExpense,0) AS is_travelExpense,
+           GROUP_CONCAT(ei.item_name SEPARATOR ', ') AS expense_items
     FROM object_code oc
     LEFT JOIN expense_items ei ON oc.objectId = ei.objectId
     WHERE oc.saroId = ?
     GROUP BY oc.objectId
+    ORDER BY oc.objectId ASC
 ");
 $stmtObj->execute([$saroId]);
 $objectCodes = $stmtObj->fetchAll(PDO::FETCH_ASSOC);
+
+// Travel documents for travel-expense procurements
+$travelDocs = $conn->query("SELECT documentId, document_name FROM required_documents WHERE applies_to_travel=1 ORDER BY sort_order")->fetchAll(PDO::FETCH_ASSOC);
+
+// Pass object-code data to JS
+$objCodesJson = json_encode(array_map(fn($oc) => [
+    'objectId'        => (int)$oc['objectId'],
+    'code'            => $oc['code'],
+    'is_travelExpense'=> (bool)(int)$oc['is_travelExpense'],
+    'projected_cost'  => (float)$oc['projected_cost'],
+], $objectCodes));
+
+// Notifications for topbar
+$notifObj      = new Notification();
+$notifications = $notifObj->getRecentActivity((int)$_SESSION['user_id'], 10);
+$unreadCount   = $notifObj->countUnread((int)$_SESSION['user_id']);
+$approvedPwReq = $notifObj->getApprovedPasswordNotification((int)$_SESSION['user_id']);
+$cancelledCount = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='cancelled'")->fetchColumn();
 
 // 3. Fetch Procurement Activities
 $stmtProc = $conn->prepare("
@@ -51,19 +254,24 @@ $stmtProc = $conn->prepare("
     FROM procurement p
     JOIN object_code oc ON p.objectId = oc.objectId
     WHERE oc.saroId = ?
-    ORDER BY p.created_at DESC
+    ORDER BY p.created_at ASC
 ");
 $stmtProc->execute([$saroId]);
-$procurements = $stmtProc->fetchAll(PDO::FETCH_ASSOC);
+$allProcurements = $stmtProc->fetchAll(PDO::FETCH_ASSOC);
+
+$procurements          = array_values(array_filter($allProcurements, fn($p) => ($p['status'] ?? 'on_process') !== 'cancelled'));
+$cancelledProcurements = array_values(array_filter($allProcurements, fn($p) => ($p['status'] ?? 'on_process') === 'cancelled'));
 
 // Calculations
 $totalBudget = (float)$saro['total_budget'];
 $totalObligated = 0.0;
 
 foreach ($procurements as $p) {
-    // Using obligated_amount or falling back to (unit_cost * quantity) if empty
-    $budgetAlloc = !empty($p['obligated_amount']) ? (float)$p['obligated_amount'] : ((float)$p['unit_cost'] * (int)$p['quantity']);
-    $totalObligated += $budgetAlloc;
+    if (($p['status'] ?? 'on_process') === 'obligated') {
+        $totalObligated += !empty($p['obligated_amount'])
+            ? (float)$p['obligated_amount']
+            : ((float)$p['unit_cost'] * (int)$p['quantity']);
+    }
 }
 
 $unobligated = $totalBudget - $totalObligated;
@@ -260,6 +468,8 @@ if ($bur < 25) {
         }
         .form-input:focus { border-color: #3b82f6; background: #fff; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
         select.form-input { cursor: pointer; }
+        .form-input.input-error { border-color: #dc2626 !important; box-shadow: 0 0 0 3px rgba(220,38,38,0.1) !important; }
+        .field-error { font-size: 10px; color: #dc2626; font-weight: 600; margin-top: 4px; display: none; }
 
         /* Search */
         .search-wrap { position: relative; }
@@ -375,6 +585,14 @@ if ($bur < 25) {
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
             </a>
+            <p class="nav-section-label">History</p>
+            <a href="cancelled_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                Cancelled SAROs
+                <?php if ($cancelledCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#b45309;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $cancelledCount ?></span>
+                <?php endif; ?>
+            </a>
             <p class="nav-section-label">Account</p>
             <a href="settings.php" class="nav-item">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -412,16 +630,10 @@ if ($bur < 25) {
                 <span class="breadcrumb-active">View SARO</span>
             </div>
             <div class="topbar-right">
-                <div class="icon-btn">
-                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-                    <span class="notif-dot"></span>
-                </div>
-                <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;
-                            background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
-                    <div style="width:28px;height:28px;border-radius:7px;
-                                background:linear-gradient(135deg,#2563eb,#1d4ed8);
-                                display:flex;align-items:center;justify-content:center;
-                                font-size:10px;font-weight:800;color:#fff;">
+                <!-- Notification -->
+                <?php $isAdmin = false; $pendingPwCount = $pendingPwCount ?? 0; $approvedPwReq = $approvedPwReq ?? null; include __DIR__ . '/../includes/notif_dropdown.php'; ?>
+                <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
+                    <div style="width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#2563eb,#1d4ed8);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff;">
                         <?= htmlspecialchars($initials) ?>
                     </div>
                     <div>
@@ -578,11 +790,11 @@ if ($bur < 25) {
                                         <td style="text-align:right;font-weight:700;color:#0f172a;">₱<?= number_format($obj['projected_cost'], 2) ?></td>
                                         <td style="text-align:right;">
                                             <div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;">
-                                                <button class="action-btn action-btn-edit" title="Edit" 
-                                                        onclick="openEditObjModal('<?= htmlspecialchars($obj['code']) ?>','<?= $obj['projected_cost'] ?>','<?= htmlspecialchars($obj['expense_items'] ?? '') ?>')">
+                                                <button class="action-btn action-btn-edit" title="Edit"
+                                                        onclick="openEditObjModal(<?= $obj['objectId'] ?>,'<?= htmlspecialchars($obj['code'],ENT_QUOTES) ?>','<?= $obj['projected_cost'] ?>','<?= htmlspecialchars($obj['expense_items']??'',ENT_QUOTES) ?>')">
                                                     <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
                                                 </button>
-                                                <button class="action-btn action-btn-del" title="Remove" onclick="openDeleteObjModal('<?= htmlspecialchars($obj['code']) ?>')">
+                                                <button class="action-btn action-btn-del" title="Remove" onclick="openDeleteObjModal(<?= $obj['objectId'] ?>,'<?= htmlspecialchars($obj['code'],ENT_QUOTES) ?>')">
                                                     <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                                                 </button>
                                             </div>
@@ -627,10 +839,18 @@ if ($bur < 25) {
                             <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>
                             Filter
                         </button>
+                        <?php if (empty($objectCodes)): ?>
+                        <button class="btn btn-ghost btn-sm" disabled title="Add at least one object code first"
+                                style="opacity:0.5;cursor:not-allowed;">
+                            <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                            Add Activity
+                        </button>
+                        <?php else: ?>
                         <button class="btn btn-primary btn-sm" onclick="openProcModal()">
                             <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                             Add Activity
                         </button>
+                        <?php endif; ?>
                     </div>
                 </div>
 
@@ -644,7 +864,8 @@ if ($bur < 25) {
                                 <th style="text-align:center;">Qty</th>
                                 <th style="text-align:center;">Unit</th>
                                 <th style="text-align:right;">Unit Cost</th>
-                                <th style="text-align:right;">Budget Alloc.</th>
+                                <th style="text-align:right;">Amt. Unobligated</th>
+                                <th style="text-align:right;">Amt. Obligated</th>
                                 <th>Period</th>
                                 <th>Procurement Date</th>
                                 <th style="text-align:center;">Status</th>
@@ -660,10 +881,14 @@ if ($bur < 25) {
                                     $pStart = !empty($p['period_start']) ? date('M Y', strtotime($p['period_start'])) : 'TBD';
                                     $pEnd   = !empty($p['period_end'])   ? date('M Y', strtotime($p['period_end']))   : 'TBD';
                                     $pDate  = !empty($p['proc_date'])    ? date('M d, Y', strtotime($p['proc_date'])) : 'TBD';
-                                    $alloc  = !empty($p['obligated_amount']) ? $p['obligated_amount'] : ($p['unit_cost'] * $p['quantity']);
-                                    // Placeholder Status based on date presence, update to real logic if/when schema incorporates status for this table
-                                    $pStatus = empty($p['proc_date']) ? 'Pending' : 'Ongoing'; 
-                                    $badge = $pStatus === 'Pending' ? 'badge-amber' : 'badge-blue';
+                                    $alloc    = !empty($p['obligated_amount']) ? $p['obligated_amount'] : ($p['unit_cost'] * $p['quantity']);
+                                    $dbStatus = $p['status'] ?? 'on_process';
+                                    $isObligated = $dbStatus === 'obligated';
+                                    [$pStatus, $badge] = match($dbStatus) {
+                                        'obligated' => ['Obligated', 'badge-green'],
+                                        'cancelled' => ['Cancelled', 'badge-red'],
+                                        default     => ['On Process', 'badge-amber'],
+                                    };
                                 ?>
                                 <tr>
                                     <td style="color:#cbd5e1;font-weight:700;font-size:11px;"><?= str_pad($index + 1, 2, '0', STR_PAD_LEFT) ?></td>
@@ -672,7 +897,20 @@ if ($bur < 25) {
                                     <td style="text-align:center;font-weight:700;color:#0f172a;"><?= htmlspecialchars($p['quantity']) ?></td>
                                     <td style="text-align:center;color:#64748b;"><?= htmlspecialchars($p['unit'] ?? '—') ?></td>
                                     <td style="text-align:right;font-weight:600;color:#334155;">₱<?= number_format((float)$p['unit_cost'], 2) ?></td>
-                                    <td style="text-align:right;font-weight:700;color:#1d4ed8;">₱<?= number_format((float)$alloc, 2) ?></td>
+                                    <td style="text-align:right;">
+                                        <?php if (!$isObligated): ?>
+                                            <span style="font-weight:700;color:#b45309;font-size:12px;">₱<?= number_format((float)$alloc, 2) ?></span>
+                                        <?php else: ?>
+                                            <span style="font-size:11px;color:#cbd5e1;">—</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td style="text-align:right;">
+                                        <?php if ($isObligated): ?>
+                                            <span style="font-weight:700;color:#16a34a;font-size:12px;">₱<?= number_format((float)$alloc, 2) ?></span>
+                                        <?php else: ?>
+                                            <span style="font-size:11px;color:#cbd5e1;">—</span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td>
                                         <div class="period-range">
                                             <span><?= $pStart ?></span>
@@ -685,17 +923,17 @@ if ($bur < 25) {
                                     <td>
                                         <div style="display:flex;align-items:center;gap:6px;">
                                             <span style="color:#94a3b8;font-size:11px;"><?= htmlspecialchars($p['remarks'] ?: '—') ?></span>
-                                            <button class="action-btn action-btn-edit" title="Edit Remarks" style="width:22px;height:22px;border-radius:5px;flex-shrink:0;" onclick="openRemarksModal('<?= htmlspecialchars(addslashes($p['remarks'] ?? '')) ?>')">
+                                            <button class="action-btn action-btn-edit" title="Edit Remarks" style="width:22px;height:22px;border-radius:5px;flex-shrink:0;" onclick="openRemarksModal(<?= $p['procurementId'] ?>,'<?= htmlspecialchars(addslashes($p['remarks'] ?? '')) ?>')">
                                                 <svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
                                             </button>
                                         </div>
                                     </td>
                                     <td style="text-align:center;">
                                         <div style="display:flex;align-items:center;justify-content:center;gap:4px;">
-                                            <button class="action-btn action-btn-edit" title="Edit" onclick="openEditProcModal('<?= htmlspecialchars($p['object_code_str']) ?>','<?= htmlspecialchars(addslashes($p['pro_act'] ?? '')) ?>','<?= $p['quantity'] ?>','<?= htmlspecialchars($p['unit'] ?? '') ?>','<?= $p['unit_cost'] ?>','<?= date('F', strtotime($p['period_start'] ?? 'now')) ?>','<?= date('Y', strtotime($p['period_start'] ?? 'now')) ?>','<?= date('F', strtotime($p['period_end'] ?? 'now')) ?>','<?= date('Y', strtotime($p['period_end'] ?? 'now')) ?>','<?= $p['proc_date'] ?>','<?= $pStatus ?>','<?= htmlspecialchars(addslashes($p['remarks'] ?? '')) ?>')">
+                                            <button class="action-btn action-btn-edit" title="Edit" onclick="openEditProcModal(<?= $p['procurementId'] ?>,'<?= htmlspecialchars($p['object_code_str'],ENT_QUOTES) ?>','<?= htmlspecialchars(addslashes($p['pro_act'] ?? ''),ENT_QUOTES) ?>','<?= $p['quantity'] ?>','<?= htmlspecialchars($p['unit'] ?? '',ENT_QUOTES) ?>','<?= $p['unit_cost'] ?>','<?= date('F', strtotime($p['period_start'] ?? 'now')) ?>','<?= date('Y', strtotime($p['period_start'] ?? 'now')) ?>','<?= date('F', strtotime($p['period_end'] ?? 'now')) ?>','<?= date('Y', strtotime($p['period_end'] ?? 'now')) ?>','<?= $p['proc_date'] ?>','<?= htmlspecialchars(addslashes($p['remarks'] ?? ''),ENT_QUOTES) ?>')">
                                                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
                                             </button>
-                                            <button class="action-btn action-btn-del" title="Delete" onclick="openDeleteProcModal('<?= htmlspecialchars(addslashes($p['pro_act'] ?? '')) ?>')">
+                                            <button class="action-btn action-btn-del" title="Delete" onclick="openDeleteProcModal(<?= $p['procurementId'] ?>,'<?= htmlspecialchars(addslashes($p['pro_act'] ?? ''),ENT_QUOTES) ?>')">
                                                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                                             </button>
                                         </div>
@@ -709,7 +947,7 @@ if ($bur < 25) {
 
                 <div style="padding:14px 24px;border-top:1px solid #f1f5f9;background:#fafbfe;display:flex;align-items:center;justify-content:space-between;">
                     <p style="font-size:11px;color:#94a3b8;font-weight:500;">
-                        Displaying <strong style="color:#475569;"><?= count($procurements) ?></strong> of <strong style="color:#475569;"><?= count($procurements) ?></strong> activities
+                        Displaying <strong style="color:#475569;"><?= count($procurements) ?></strong> active <?= count($procurements) === 1 ? 'activity' : 'activities' ?>
                     </p>
                     <div style="display:flex;align-items:center;gap:20px;">
                         <div style="text-align:right;">
@@ -724,6 +962,56 @@ if ($bur < 25) {
                     </div>
                 </div>
             </div>
+
+            <?php if (!empty($cancelledProcurements)): ?>
+            <div style="background:#fff;border:1px solid #fecaca;border-radius:16px;overflow:hidden;margin-top:20px;">
+                <div style="padding:14px 24px;border-bottom:1px solid #fee2e2;display:flex;align-items:center;gap:10px;background:#fff7f7;">
+                    <div style="width:30px;height:30px;border-radius:8px;background:#fee2e2;display:flex;align-items:center;justify-content:center;">
+                        <svg width="14" height="14" fill="none" stroke="#dc2626" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </div>
+                    <div>
+                        <p style="font-size:13px;font-weight:800;color:#dc2626;">Cancelled Activities</p>
+                        <p style="font-size:10px;color:#f87171;font-weight:500;"><?= count($cancelledProcurements) ?> cancelled procurement <?= count($cancelledProcurements) === 1 ? 'activity' : 'activities' ?></p>
+                    </div>
+                </div>
+                <div style="overflow-x:auto;">
+                    <table style="width:100%;border-collapse:collapse;">
+                        <thead>
+                            <tr style="background:#fff7f7;">
+                                <th style="padding:10px 14px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#f87171;width:40px;text-align:left;">No.</th>
+                                <th style="padding:10px 14px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#f87171;text-align:left;">Object Code</th>
+                                <th style="padding:10px 14px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#f87171;text-align:left;">Activity</th>
+                                <th style="padding:10px 14px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#f87171;text-align:center;">Qty</th>
+                                <th style="padding:10px 14px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#f87171;text-align:center;">Unit</th>
+                                <th style="padding:10px 14px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#f87171;text-align:right;">Unit Cost</th>
+                                <th style="padding:10px 14px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#f87171;text-align:left;">Period</th>
+                                <th style="padding:10px 14px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#f87171;text-align:left;">Proc. Date</th>
+                                <th style="padding:10px 14px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#f87171;text-align:left;">Remarks</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($cancelledProcurements as $ci => $cp):
+                                $cpStart = !empty($cp['period_start']) ? date('M Y', strtotime($cp['period_start'])) : 'TBD';
+                                $cpEnd   = !empty($cp['period_end'])   ? date('M Y', strtotime($cp['period_end']))   : 'TBD';
+                                $cpDate  = !empty($cp['proc_date'])    ? date('M d, Y', strtotime($cp['proc_date'])) : 'TBD';
+                            ?>
+                            <tr style="border-top:1px solid #fee2e2;opacity:0.8;">
+                                <td style="padding:11px 14px;font-size:11px;font-weight:700;color:#f87171;"><?= str_pad($ci + 1, 2, '0', STR_PAD_LEFT) ?></td>
+                                <td style="padding:11px 14px;font-size:11px;font-weight:700;color:#1d4ed8;"><?= htmlspecialchars($cp['object_code_str']) ?></td>
+                                <td style="padding:11px 14px;font-size:12px;font-weight:600;color:#6b7280;text-decoration:line-through;"><?= htmlspecialchars($cp['pro_act'] ?? '—') ?></td>
+                                <td style="padding:11px 14px;font-size:12px;color:#9ca3af;text-align:center;"><?= htmlspecialchars($cp['quantity']) ?></td>
+                                <td style="padding:11px 14px;font-size:12px;color:#9ca3af;text-align:center;"><?= htmlspecialchars($cp['unit'] ?? '—') ?></td>
+                                <td style="padding:11px 14px;font-size:12px;color:#9ca3af;text-align:right;">₱<?= number_format((float)$cp['unit_cost'], 2) ?></td>
+                                <td style="padding:11px 14px;font-size:11px;color:#9ca3af;"><?= $cpStart ?> — <?= $cpEnd ?></td>
+                                <td style="padding:11px 14px;font-size:11px;color:#9ca3af;"><?= $cpDate ?></td>
+                                <td style="padding:11px 14px;font-size:11px;color:#9ca3af;"><?= htmlspecialchars($cp['remarks'] ?: '—') ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <?php endif; ?>
 
         </div><!-- /content -->
     </main>
@@ -750,90 +1038,118 @@ if ($bur < 25) {
             </button>
         </div>
         <div style="padding:24px 28px;display:flex;flex-direction:column;gap:16px;max-height:70vh;overflow-y:auto;">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-                <div>
-                    <label class="form-label">Object Code</label>
-                    <select class="form-input">
-                        <option value="">Select object code…</option>
-                        <?php foreach ($objectCodes as $obj): ?>
-                            <option value="<?= htmlspecialchars($obj['objectId']) ?>"><?= htmlspecialchars($obj['code']) ?> — <?= htmlspecialchars(mb_strimwidth($obj['expense_items'] ?? '', 0, 30, '...')) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div>
-                    <label class="form-label">Status</label>
-                    <select class="form-input">
-                        <option>Pending</option>
-                        <option>Ongoing</option>
-                        <option>Delivered</option>
-                        <option>Cancelled</option>
-                    </select>
-                </div>
+            <input type="hidden" id="proc-is-travel" value="0">
+            <input type="hidden" id="proc-all-docs-checked" value="0">
+            <div>
+                <label class="form-label">Object Code <span style="color:#dc2626;">*</span></label>
+                <select class="form-input" id="proc-obj-code" onchange="handleProcObjChange(this)">
+                    <option value="">Select object code…</option>
+                    <?php foreach ($objectCodes as $obj): ?>
+                        <option value="<?= (int)$obj['objectId'] ?>" data-travel="<?= (int)$obj['is_travelExpense'] ?>">
+                            <?= htmlspecialchars($obj['code']) ?><?= !empty($obj['expense_items']) ? ' — '.htmlspecialchars(mb_strimwidth($obj['expense_items'],0,38,'...')) : '' ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <p class="field-error" id="err-proc-obj-code"></p>
             </div>
             <div>
-                <label class="form-label">Procurement Activity</label>
-                <input type="text" class="form-input" placeholder="e.g. Laptop Computer (Core i7)">
+                <label class="form-label">Procurement Activity <span style="color:#dc2626;">*</span></label>
+                <input type="text" class="form-input" id="proc-activity" placeholder="e.g. Laptop Computer (Core i7)">
+                <p class="field-error" id="err-proc-activity"></p>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
                 <div>
-                    <label class="form-label">Quantity</label>
-                    <input type="number" class="form-input" placeholder="0" min="1">
+                    <label class="form-label">Quantity <span style="color:#dc2626;">*</span></label>
+                    <input type="number" class="form-input" id="proc-qty" placeholder="0" min="1" oninput="updateBudgetAlloc()">
+                    <p class="field-error" id="err-proc-qty"></p>
                 </div>
                 <div>
-                    <label class="form-label">Unit</label>
-                    <select class="form-input">
+                    <label class="form-label">Unit <span style="font-size:9px;color:#94a3b8;font-weight:500;text-transform:none;">(optional)</span></label>
+                    <select class="form-input" id="proc-unit">
+                        <option value="">— None —</option>
                         <option>Unit</option><option>Lot</option><option>Set</option>
                         <option>Month</option><option>Year</option><option>Piece</option>
                     </select>
                 </div>
                 <div>
-                    <label class="form-label">Unit Cost (₱)</label>
-                    <input type="number" class="form-input" placeholder="0.00" min="0" step="0.01">
+                    <label class="form-label">Unit Cost (₱) <span style="color:#dc2626;">*</span></label>
+                    <input type="number" class="form-input" id="proc-unit-cost" placeholder="0.00" min="0" step="0.01" oninput="updateBudgetAlloc()">
+                    <p class="field-error" id="err-proc-unit-cost"></p>
+                </div>
+            </div>
+            <!-- Budget allocation live display -->
+            <div id="proc-budget-alloc-wrap" style="display:none;padding:10px 14px;background:#eff6ff;border:1.5px solid #bfdbfe;border-radius:10px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <span style="font-size:11px;font-weight:700;color:#1e40af;text-transform:uppercase;letter-spacing:0.08em;">Budget Allocation (Qty × Unit Cost)</span>
+                    <span id="proc-budget-alloc-val" style="font-size:15px;font-weight:900;color:#1d4ed8;letter-spacing:-0.02em;">₱0.00</span>
+                </div>
+                <div id="proc-budget-warning" style="display:none;margin-top:8px;padding:8px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <svg width="13" height="13" fill="none" stroke="#dc2626" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            <span style="font-size:11px;font-weight:600;color:#b91c1c;">Exceeds projected cost of <span id="proc-projected-cost-val">₱0.00</span> — projected cost is just an estimate.</span>
+                        </div>
+                        <button type="button" onclick="dismissCostWarning()"
+                                style="padding:3px 10px;border-radius:6px;border:1px solid #fca5a5;background:#fee2e2;color:#b91c1c;font-size:10px;font-weight:700;font-family:'Poppins',sans-serif;cursor:pointer;white-space:nowrap;flex-shrink:0;">
+                            Proceed Anyway
+                        </button>
+                    </div>
                 </div>
             </div>
             <div>
-                <label class="form-label">Procurement Period</label>
+                <label class="form-label">Procurement Period <span style="color:#dc2626;">*</span></label>
                 <div class="period-pair" style="margin-top:4px;">
                     <div style="display:flex;flex-direction:column;gap:6px;">
                         <span style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;">Period Start</span>
                         <div style="display:grid;grid-template-columns:1fr 80px;gap:8px;">
-                            <select class="form-input">
+                            <select class="form-input" id="proc-start-month">
                                 <option>January</option><option>February</option><option>March</option>
                                 <option>April</option><option>May</option><option>June</option>
                                 <option>July</option><option>August</option><option>September</option>
                                 <option>October</option><option>November</option><option>December</option>
                             </select>
-                            <input type="number" class="form-input" value="<?= htmlspecialchars($saro['fiscal_year']) ?>" min="2020" max="2099">
+                            <input type="number" class="form-input" id="proc-start-year" value="<?= htmlspecialchars($saro['fiscal_year']) ?>" min="2020" max="2099">
                         </div>
                     </div>
                     <div class="period-label-sep" style="padding-top:20px;">—</div>
                     <div style="display:flex;flex-direction:column;gap:6px;">
                         <span style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;">Period End</span>
                         <div style="display:grid;grid-template-columns:1fr 80px;gap:8px;">
-                            <select class="form-input">
+                            <select class="form-input" id="proc-end-month">
                                 <option>January</option><option>February</option><option>March</option>
                                 <option>April</option><option>May</option><option>June</option>
                                 <option>July</option><option>August</option><option>September</option>
                                 <option>October</option><option>November</option><option>December</option>
                             </select>
-                            <input type="number" class="form-input" value="<?= htmlspecialchars($saro['fiscal_year']) ?>" min="2020" max="2099">
+                            <input type="number" class="form-input" id="proc-end-year" value="<?= htmlspecialchars($saro['fiscal_year']) ?>" min="2020" max="2099">
                         </div>
                     </div>
                 </div>
+                <p class="field-error" id="err-proc-period"></p>
             </div>
             <div>
                 <label class="form-label">Procurement Date</label>
-                <input type="date" class="form-input">
+                <input type="date" class="form-input" id="proc-date">
             </div>
             <div>
                 <label class="form-label">Remarks</label>
-                <input type="text" class="form-input" placeholder="Optional notes…">
+                <input type="text" class="form-input" id="proc-remarks" placeholder="Optional notes…">
+            </div>
+            <!-- Travel note (shown when OC is travel expense) -->
+            <div id="travel-note-section" style="display:none;border:1.5px solid #3b82f6;border-radius:12px;padding:14px 16px;background:#eff6ff;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <svg width="15" height="15" fill="none" stroke="#3b82f6" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    <p style="font-size:11px;font-weight:600;color:#1d4ed8;line-height:1.5;">
+                        <strong>Travel Expense</strong> — Required documents will be checked in
+                        <em>View Procurement Activities</em>. This activity will be saved as <strong>On Process</strong> and obligation happens after all travel documents are verified there.
+                    </p>
+                </div>
             </div>
         </div>
         <div style="padding:16px 28px;border-top:1px solid #f1f5f9;background:#fafbfe;
                     display:flex;align-items:center;justify-content:flex-end;gap:10px;">
             <button class="btn btn-ghost" onclick="closeProcModal()">Cancel</button>
-            <button class="btn btn-primary">
+            <button class="btn btn-primary" onclick="saveProcActivity()">
                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                 Save Activity
             </button>
@@ -862,25 +1178,17 @@ if ($bur < 25) {
             </button>
         </div>
         <div style="padding:24px 28px;display:flex;flex-direction:column;gap:16px;max-height:70vh;overflow-y:auto;">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-                <div>
-                    <label class="form-label">Object Code</label>
-                    <select class="form-input" id="ep-obj-code">
-                        <option value="">Select object code…</option>
-                        <?php foreach ($objectCodes as $obj): ?>
-                            <option value="<?= htmlspecialchars($obj['code']) ?>"><?= htmlspecialchars($obj['code']) ?> — <?= htmlspecialchars(mb_strimwidth($obj['expense_items'] ?? '', 0, 30, '...')) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div>
-                    <label class="form-label">Status</label>
-                    <select class="form-input" id="ep-status">
-                        <option value="Pending">Pending</option>
-                        <option value="Ongoing">Ongoing</option>
-                        <option value="Delivered">Delivered</option>
-                        <option value="Cancelled">Cancelled</option>
-                    </select>
-                </div>
+            <input type="hidden" id="edit-proc-id">
+            <div>
+                <label class="form-label">Object Code</label>
+                <select class="form-input" id="ep-obj-code">
+                    <option value="">Select object code…</option>
+                    <?php foreach ($objectCodes as $obj): ?>
+                        <option value="<?= htmlspecialchars($obj['code'],ENT_QUOTES) ?>">
+                            <?= htmlspecialchars($obj['code']) ?><?= !empty($obj['expense_items']) ? ' — '.htmlspecialchars(mb_strimwidth($obj['expense_items'],0,30,'...')) : '' ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
             </div>
             <div>
                 <label class="form-label">Procurement Activity</label>
@@ -894,6 +1202,7 @@ if ($bur < 25) {
                 <div>
                     <label class="form-label">Unit</label>
                     <select class="form-input" id="ep-unit">
+                        <option value="">— None —</option>
                         <option>Unit</option><option>Lot</option><option>Set</option>
                         <option>Month</option><option>Year</option><option>Piece</option>
                     </select>
@@ -945,7 +1254,7 @@ if ($bur < 25) {
         <div style="padding:16px 28px;border-top:1px solid #f1f5f9;background:#fafbfe;
                     display:flex;align-items:center;justify-content:flex-end;gap:10px;">
             <button class="btn btn-ghost" onclick="closeEditProcModal()">Cancel</button>
-            <button class="btn btn-primary">
+            <button class="btn btn-primary" onclick="saveEditProc()">
                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                 Save Changes
             </button>
@@ -992,7 +1301,7 @@ if ($bur < 25) {
         </div>
         <div class="modal-footer">
             <button class="btn btn-ghost" onclick="closeEditSaroModal()">Cancel</button>
-            <button class="btn btn-primary">
+            <button class="btn btn-primary" onclick="saveEditSaro()">
                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                 Save Changes
             </button>
@@ -1026,12 +1335,13 @@ if ($bur < 25) {
         </div>
         <div class="modal-body">
             <!-- Header row -->
-            <div style="display:grid;grid-template-columns:1fr 130px 1fr 32px;gap:8px;
+            <div style="display:grid;grid-template-columns:1fr 120px 1fr 76px 32px;gap:8px;
                         padding:6px 10px;background:#f8fafc;border:1px solid #e8edf5;
                         border-radius:8px 8px 0 0;border-bottom:none;margin-bottom:0;">
                 <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Object Code</p>
                 <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Projected Cost (₱)</p>
                 <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Expense Item</p>
+                <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Travel?</p>
                 <span></span>
             </div>
             <!-- Rows container -->
@@ -1041,7 +1351,7 @@ if ($bur < 25) {
         </div>
         <div class="modal-footer">
             <button class="btn btn-ghost" onclick="closeAddObjModal()">Cancel</button>
-            <button class="btn btn-primary">
+            <button class="btn btn-primary" onclick="saveObjCodes()">
                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                 Save Object Codes
             </button>
@@ -1062,6 +1372,7 @@ if ($bur < 25) {
             </button>
         </div>
         <div class="modal-body">
+            <input type="hidden" id="edit-obj-id">
             <div>
                 <label class="form-label">Object Code</label>
                 <input type="text" class="form-input" id="edit-obj-code">
@@ -1077,7 +1388,7 @@ if ($bur < 25) {
         </div>
         <div class="modal-footer">
             <button class="btn btn-ghost" onclick="closeEditObjModal()">Cancel</button>
-            <button class="btn btn-primary">
+            <button class="btn btn-primary" onclick="saveEditObj()">
                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                 Save Changes
             </button>
@@ -1089,6 +1400,7 @@ if ($bur < 25) {
 <div id="deleteObjModal" class="modal-overlay">
     <div class="modal-card" style="max-width:400px;">
         <div style="padding:32px 28px 24px;display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;">
+            <input type="hidden" id="delete-obj-id">
             <div style="width:56px;height:56px;border-radius:50%;background:#fee2e2;border:1px solid #fecaca;
                         display:flex;align-items:center;justify-content:center;color:#dc2626;">
                 <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
@@ -1102,7 +1414,7 @@ if ($bur < 25) {
         </div>
         <div class="modal-footer">
             <button class="btn btn-ghost" onclick="closeDeleteObjModal()">Cancel</button>
-            <button class="btn btn-primary" style="background:#dc2626;border-color:#dc2626;">
+            <button class="btn btn-primary" style="background:#dc2626;border-color:#dc2626;" onclick="confirmDeleteObj()">
                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                 Delete
             </button>
@@ -1130,7 +1442,7 @@ if ($bur < 25) {
         </div>
         <div class="modal-footer">
             <button class="btn btn-ghost" onclick="closeRemarksModal()">Cancel</button>
-            <button class="btn btn-primary">
+            <button class="btn btn-primary" id="saveRemarksBtn">
                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                 Save Remarks
             </button>
@@ -1142,6 +1454,7 @@ if ($bur < 25) {
 <div id="deleteProcModal" class="modal-overlay">
     <div class="modal-card" style="max-width:400px;">
         <div style="padding:32px 28px 24px;display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;">
+            <input type="hidden" id="delete-proc-id">
             <div style="width:56px;height:56px;border-radius:50%;background:#fee2e2;border:1px solid #fecaca;
                         display:flex;align-items:center;justify-content:center;color:#dc2626;">
                 <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
@@ -1155,7 +1468,7 @@ if ($bur < 25) {
         </div>
         <div class="modal-footer">
             <button class="btn btn-ghost" onclick="closeDeleteProcModal()">Cancel</button>
-            <button class="btn btn-primary" style="background:#dc2626;border-color:#dc2626;">
+            <button class="btn btn-primary" style="background:#dc2626;border-color:#dc2626;" onclick="confirmDeleteProc()">
                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                 Delete
             </button>
@@ -1164,22 +1477,116 @@ if ($bur < 25) {
 </div>
 
 <script>
-    // Add Activity Modal
-    function openProcModal()  { document.getElementById('procModal').style.display = 'flex'; }
+    const currentSaroId = <?= (int)$saroId ?>;
+    const objCodesData  = <?= $objCodesJson ?>;
+    const travelDocsCount = <?= count($travelDocs) ?>;
+
+    // ─── Helpers ─────────────────────────────────────────────────────────────
+    function getVal(id) { const el = document.getElementById(id); return el ? el.value.trim() : ''; }
+    function setVal(id, val) { const el = document.getElementById(id); if (el) el.value = (val ?? ''); }
+    function setOpt(id, val) {
+        const el = document.getElementById(id); if (!el) return;
+        [...el.options].forEach(o => { o.selected = o.value === String(val) || o.text === String(val); });
+    }
+    function setFieldError(fieldId, errId, msg) {
+        const f = document.getElementById(fieldId);
+        const e = document.getElementById(errId);
+        if (f) { f.classList.toggle('input-error', !!msg); }
+        if (e) { e.textContent = msg; e.style.display = msg ? '' : 'none'; }
+    }
+    function clearErrors(...pairs) { pairs.forEach(([f, e]) => setFieldError(f, e, '')); }
+    function postAjax(data) {
+        const fd = new FormData();
+        Object.entries(data).forEach(([k, v]) => {
+            if (Array.isArray(v)) v.forEach(i => fd.append(k + '[]', i));
+            else fd.append(k, v);
+        });
+        return fetch(location.href, { method: 'POST', body: fd }).then(r => r.json());
+    }
+
+    // ─── Notification dropdown ────────────────────────────────────────────────
+    // ─── Add Activity Modal ───────────────────────────────────────────────────
+    function openProcModal() {
+        setVal('proc-obj-code', ''); setVal('proc-activity', '');
+        setVal('proc-qty', ''); setVal('proc-unit', ''); setVal('proc-unit-cost', '');
+        setVal('proc-date', ''); setVal('proc-remarks', '');
+        document.getElementById('proc-is-travel').value = '0';
+        document.getElementById('travel-note-section').style.display = 'none';
+        document.getElementById('proc-budget-alloc-wrap').style.display = 'none';
+        document.getElementById('proc-budget-warning').style.display = 'none';
+        clearErrors(['proc-obj-code','err-proc-obj-code'],['proc-activity','err-proc-activity'],
+                    ['proc-qty','err-proc-qty'],['proc-unit-cost','err-proc-unit-cost']);
+        document.getElementById('procModal').style.display = 'flex';
+    }
     function closeProcModal() { document.getElementById('procModal').style.display = 'none'; }
     document.getElementById('procModal').addEventListener('click', function(e) {
         if (e.target === this) closeProcModal();
     });
 
-    // Edit Activity Modal
-    const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-    function openEditProcModal(objCode, activity, qty, unit, unitCost, startMonth, startYear, endMonth, endYear, date, status, remarks) {
-        const setVal = (id, val) => { const el = document.getElementById(id); if(el) el.value = val; };
-        const setOpt = (id, val) => {
-            const el = document.getElementById(id);
-            if (!el) return;
-            [...el.options].forEach(o => { o.selected = o.value === val || o.text === val; });
-        };
+    function handleProcObjChange(sel) {
+        const opt = sel.options[sel.selectedIndex];
+        const isTravel = opt && opt.dataset.travel === '1';
+        document.getElementById('proc-is-travel').value = isTravel ? '1' : '0';
+        document.getElementById('travel-note-section').style.display = isTravel ? '' : 'none';
+        updateBudgetAlloc();
+    }
+
+    function updateBudgetAlloc() {
+        const objId = parseInt(getVal('proc-obj-code')) || 0;
+        const qty   = parseFloat(getVal('proc-qty'))       || 0;
+        const cost  = parseFloat(getVal('proc-unit-cost')) || 0;
+        const alloc = qty * cost;
+        const wrap  = document.getElementById('proc-budget-alloc-wrap');
+        const warnEl = document.getElementById('proc-budget-warning');
+
+        if (qty > 0 && cost > 0) {
+            wrap.style.display = '';
+            document.getElementById('proc-budget-alloc-val').textContent =
+                '₱' + alloc.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+            const oc = objCodesData.find(o => o.objectId === objId);
+            if (oc && oc.projected_cost > 0 && alloc > oc.projected_cost) {
+                document.getElementById('proc-projected-cost-val').textContent =
+                    '₱' + oc.projected_cost.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+                warnEl.style.display = '';
+            } else {
+                warnEl.style.display = 'none';
+            }
+        } else {
+            wrap.style.display = 'none';
+        }
+    }
+
+    function dismissCostWarning() {
+        document.getElementById('proc-budget-warning').style.display = 'none';
+    }
+
+    function saveProcActivity() {
+        clearErrors(['proc-obj-code','err-proc-obj-code'],['proc-activity','err-proc-activity'],
+                    ['proc-qty','err-proc-qty'],['proc-unit-cost','err-proc-unit-cost']);
+        let ok = true;
+        if (!getVal('proc-obj-code'))     { setFieldError('proc-obj-code','err-proc-obj-code','Select an object code.'); ok = false; }
+        if (!getVal('proc-activity'))     { setFieldError('proc-activity','err-proc-activity','Activity name is required.'); ok = false; }
+        if (!getVal('proc-qty') || parseInt(getVal('proc-qty')) < 1) { setFieldError('proc-qty','err-proc-qty','Enter a valid quantity.'); ok = false; }
+        if (getVal('proc-unit-cost') === '' || parseFloat(getVal('proc-unit-cost')) < 0) { setFieldError('proc-unit-cost','err-proc-unit-cost','Enter a valid unit cost.'); ok = false; }
+        if (!ok) return;
+        postAjax({
+            ajax_action: 'add_procurement', saroId: currentSaroId,
+            objectId: getVal('proc-obj-code'), pro_act: getVal('proc-activity'),
+            quantity: getVal('proc-qty'), unit: document.getElementById('proc-unit').value,
+            unit_cost: getVal('proc-unit-cost'),
+            period_start_month: document.getElementById('proc-start-month').value,
+            period_start_year: getVal('proc-start-year'),
+            period_end_month: document.getElementById('proc-end-month').value,
+            period_end_year: getVal('proc-end-year'),
+            proc_date: getVal('proc-date'), remarks: getVal('proc-remarks'),
+            is_travelExpense: document.getElementById('proc-is-travel').value,
+        }).then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
+          .catch(() => alert('Network error.'));
+    }
+
+    // ─── Edit Activity Modal ──────────────────────────────────────────────────
+    function openEditProcModal(procId, objCode, activity, qty, unit, unitCost, startMonth, startYear, endMonth, endYear, date, remarks) {
+        setVal('edit-proc-id', procId);
         setOpt('ep-obj-code', objCode);
         setVal('ep-activity', activity);
         setVal('ep-qty', qty);
@@ -1190,7 +1597,6 @@ if ($bur < 25) {
         setOpt('ep-end-month', endMonth);
         setVal('ep-end-year', endYear);
         setVal('ep-date', date);
-        setOpt('ep-status', status);
         setVal('ep-remarks', remarks);
         document.getElementById('editProcModal').style.display = 'flex';
     }
@@ -1199,25 +1605,111 @@ if ($bur < 25) {
         if (e.target === this) closeEditProcModal();
     });
 
-    // Edit SARO Modal
+    function saveEditProc() {
+        const procId = getVal('edit-proc-id'); if (!procId) return;
+        postAjax({
+            ajax_action: 'edit_procurement', saroId: currentSaroId, procurementId: procId,
+            pro_act: getVal('ep-activity'), quantity: getVal('ep-qty'),
+            unit: document.getElementById('ep-unit').value, unit_cost: getVal('ep-unit-cost'),
+            period_start_month: document.getElementById('ep-start-month').value,
+            period_start_year: getVal('ep-start-year'),
+            period_end_month: document.getElementById('ep-end-month').value,
+            period_end_year: getVal('ep-end-year'),
+            proc_date: getVal('ep-date'), remarks: getVal('ep-remarks'),
+        }).then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
+          .catch(() => alert('Network error.'));
+    }
+
+    // ─── Edit SARO Modal ──────────────────────────────────────────────────────
     function openEditSaroModal() { document.getElementById('editSaroModal').classList.add('open'); }
     function closeEditSaroModal() { document.getElementById('editSaroModal').classList.remove('open'); }
     document.getElementById('editSaroModal').addEventListener('click', function(e) {
         if (e.target === this) closeEditSaroModal();
     });
 
-    // Add Object Code Modal
+    function saveEditSaro() {
+        postAjax({
+            ajax_action: 'edit_saro', saroId: currentSaroId,
+            saro_title: getVal('edit-saro-title'), fiscal_year: getVal('edit-fiscal-year'),
+            total_budget: getVal('edit-total-budget'),
+            status: document.getElementById('edit-status').value,
+        }).then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
+          .catch(() => alert('Network error.'));
+    }
+
+    // ─── Add Object Code Modal ────────────────────────────────────────────────
     function openAddObjModal() { document.getElementById('addObjModal').classList.add('open'); }
-    function closeAddObjModal() { document.getElementById('addObjModal').classList.remove('open'); }
+    function closeAddObjModal() {
+        document.getElementById('addObjModal').classList.remove('open');
+        document.getElementById('objCodeListView').innerHTML = '';
+        const hint = document.getElementById('objViewEmptyHint');
+        if (hint) hint.style.display = '';
+    }
     document.getElementById('addObjModal').addEventListener('click', function(e) {
         if (e.target === this) closeAddObjModal();
     });
 
-    // Edit Object Code Modal
-    function openEditObjModal(code, cost, item) {
-        document.getElementById('edit-obj-code').value = code;
-        document.getElementById('edit-obj-cost').value = cost;
-        document.getElementById('edit-obj-expense-item').value = item || '';
+    function addObjRowView() {
+        const list = document.getElementById('objCodeListView');
+        const hint = document.getElementById('objViewEmptyHint');
+        if (hint) hint.style.display = 'none';
+        const row = document.createElement('div');
+        row.style.cssText = 'background:#fff;border-bottom:1px solid #f1f5f9;transition:background 0.15s ease;';
+        row.onmouseenter = () => row.style.background = '#f5f8ff';
+        row.onmouseleave = () => row.style.background = '#fff';
+        const inp = 'width:100%;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12px;font-family:\'Poppins\',sans-serif;font-weight:500;color:#0f172a;background:#f8fafc;outline:none;transition:all 0.2s ease;';
+        const foc = "onfocus=\"this.style.borderColor='#3b82f6';this.style.background='#fff';this.style.boxShadow='0 0 0 3px rgba(59,130,246,0.1)'\"";
+        const blr = "onblur=\"this.style.borderColor='#e2e8f0';this.style.background='#f8fafc';this.style.boxShadow='none'\"";
+        row.innerHTML = `<div style="display:grid;grid-template-columns:1fr 120px 1fr auto 32px;gap:8px;align-items:center;padding:10px;">
+            <input type="text" placeholder="e.g. 5-02-03-070" style="${inp}" ${foc} ${blr}>
+            <input type="number" placeholder="0.00" min="0" step="0.01" style="${inp}" ${foc} ${blr}>
+            <input type="text" placeholder="e.g. ICT Equipment" style="${inp}" ${foc} ${blr}>
+            <label style="display:flex;align-items:center;gap:5px;font-size:10px;font-weight:600;color:#64748b;white-space:nowrap;cursor:pointer;">
+                <input type="checkbox" style="width:13px;height:13px;accent-color:#3b82f6;cursor:pointer;"> Travel
+            </label>
+            <button type="button" onclick="removeObjRowView(this)" title="Remove row"
+                    style="width:28px;height:28px;border-radius:6px;border:1px solid transparent;background:transparent;cursor:pointer;color:#94a3b8;display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;flex-shrink:0;"
+                    onmouseenter="this.style.background='#fee2e2';this.style.borderColor='#fecaca';this.style.color='#dc2626'"
+                    onmouseleave="this.style.background='transparent';this.style.borderColor='transparent';this.style.color='#94a3b8'">
+                <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                </svg>
+            </button>
+        </div>`;
+        list.appendChild(row);
+        row.querySelector('input[type=text]').focus();
+    }
+
+    function removeObjRowView(btn) {
+        const list = document.getElementById('objCodeListView');
+        btn.closest('div[style]').parentElement.remove();
+        if (list.children.length === 0) {
+            const hint = document.getElementById('objViewEmptyHint');
+            if (hint) hint.style.display = '';
+        }
+    }
+
+    function saveObjCodes() {
+        const rows = document.querySelectorAll('#objCodeListView > div');
+        const items = [];
+        rows.forEach(row => {
+            const inps = row.querySelectorAll('input');
+            const code = inps[0]?.value.trim();
+            if (!code) return;
+            items.push({ code, cost: parseFloat(inps[1]?.value) || 0, expense_item: inps[2]?.value.trim() || '', is_travel: inps[3]?.checked ? 1 : 0 });
+        });
+        if (!items.length) { alert('Add at least one object code row.'); return; }
+        postAjax({ ajax_action: 'add_object_codes', saroId: currentSaroId, items: JSON.stringify(items) })
+            .then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
+            .catch(() => alert('Network error.'));
+    }
+
+    // ─── Edit Object Code Modal ───────────────────────────────────────────────
+    function openEditObjModal(objectId, code, cost, item) {
+        setVal('edit-obj-id', objectId);
+        setVal('edit-obj-code', code);
+        setVal('edit-obj-cost', cost);
+        setVal('edit-obj-expense-item', item || '');
         document.getElementById('editObjModal').classList.add('open');
         setTimeout(() => document.getElementById('edit-obj-code').focus(), 100);
     }
@@ -1226,8 +1718,19 @@ if ($bur < 25) {
         if (e.target === this) closeEditObjModal();
     });
 
-    // Delete Object Code Modal
-    function openDeleteObjModal(code) {
+    function saveEditObj() {
+        const objectId = getVal('edit-obj-id'); if (!objectId) return;
+        postAjax({
+            ajax_action: 'edit_object_code', saroId: currentSaroId, objectId,
+            code: getVal('edit-obj-code'), projected_cost: getVal('edit-obj-cost'),
+            expense_item: getVal('edit-obj-expense-item'),
+        }).then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
+          .catch(() => alert('Network error.'));
+    }
+
+    // ─── Delete Object Code Modal ─────────────────────────────────────────────
+    function openDeleteObjModal(objectId, code) {
+        setVal('delete-obj-id', objectId);
         document.getElementById('delete-obj-label').textContent = code;
         document.getElementById('deleteObjModal').classList.add('open');
     }
@@ -1236,8 +1739,17 @@ if ($bur < 25) {
         if (e.target === this) closeDeleteObjModal();
     });
 
-    // Edit Remarks Modal
-    function openRemarksModal(text) {
+    function confirmDeleteObj() {
+        const objectId = getVal('delete-obj-id'); if (!objectId) return;
+        postAjax({ ajax_action: 'delete_object_code', saroId: currentSaroId, objectId })
+            .then(d => { if (d.success) location.reload(); else alert(d.error || 'Delete failed.'); })
+            .catch(() => alert('Network error.'));
+    }
+
+    // ─── Edit Remarks Modal ───────────────────────────────────────────────────
+    let _remarksProcId = null;
+    function openRemarksModal(procId, text) {
+        _remarksProcId = procId;
         document.getElementById('remarks-textarea').value = text;
         document.getElementById('remarksModal').classList.add('open');
     }
@@ -1245,9 +1757,16 @@ if ($bur < 25) {
     document.getElementById('remarksModal').addEventListener('click', function(e) {
         if (e.target === this) closeRemarksModal();
     });
+    document.getElementById('saveRemarksBtn').addEventListener('click', function() {
+        if (!_remarksProcId) return;
+        postAjax({ ajax_action: 'edit_remarks', saroId: currentSaroId, procurementId: _remarksProcId, remarks: document.getElementById('remarks-textarea').value })
+            .then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
+            .catch(() => alert('Network error.'));
+    });
 
-    // Delete Procurement Modal
-    function openDeleteProcModal(name) {
+    // ─── Delete Procurement Modal ─────────────────────────────────────────────
+    function openDeleteProcModal(procId, name) {
+        setVal('delete-proc-id', procId);
         document.getElementById('delete-proc-label').textContent = name;
         document.getElementById('deleteProcModal').classList.add('open');
     }
@@ -1256,58 +1775,11 @@ if ($bur < 25) {
         if (e.target === this) closeDeleteProcModal();
     });
 
-    // Add Object Row (view)
-    function addObjRowView() {
-        const list = document.getElementById('objCodeListView');
-        const hint = document.getElementById('objViewEmptyHint');
-        if (hint) hint.style.display = 'none';
-        const row = document.createElement('div');
-        row.style.cssText = 'padding:10px 10px 8px;border-bottom:1px solid #f1f5f9;background:#fff;transition:background 0.15s ease;';
-        row.onmouseenter = () => row.style.background = '#f5f8ff';
-        row.onmouseleave = () => row.style.background = '#fff';
-        row.innerHTML = `
-            <div style="display:grid;grid-template-columns:1fr 130px 1fr 32px;gap:8px;align-items:center;padding:10px 10px 8px;">
-                <input type="text" placeholder="e.g. 5-02-03-070"
-                       style="width:100%;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;
-                              font-size:12px;font-family:'Poppins',sans-serif;font-weight:500;color:#0f172a;
-                              background:#f8fafc;outline:none;transition:all 0.2s ease;"
-                       onfocus="this.style.borderColor='#3b82f6';this.style.background='#fff';this.style.boxShadow='0 0 0 3px rgba(59,130,246,0.1)'"
-                       onblur="this.style.borderColor='#e2e8f0';this.style.background='#f8fafc';this.style.boxShadow='none'">
-                <input type="number" placeholder="0.00" min="0" step="0.01"
-                       style="width:100%;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;
-                              font-size:12px;font-family:'Poppins',sans-serif;font-weight:500;color:#0f172a;
-                              background:#f8fafc;outline:none;transition:all 0.2s ease;"
-                       onfocus="this.style.borderColor='#3b82f6';this.style.background='#fff';this.style.boxShadow='0 0 0 3px rgba(59,130,246,0.1)'"
-                       onblur="this.style.borderColor='#e2e8f0';this.style.background='#f8fafc';this.style.boxShadow='none'">
-                <input type="text" placeholder="e.g. ICT Equipment"
-                       style="width:100%;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;
-                              font-size:12px;font-family:'Poppins',sans-serif;font-weight:500;color:#0f172a;
-                              background:#f8fafc;outline:none;transition:all 0.2s ease;"
-                       onfocus="this.style.borderColor='#3b82f6';this.style.background='#fff';this.style.boxShadow='0 0 0 3px rgba(59,130,246,0.1)'"
-                       onblur="this.style.borderColor='#e2e8f0';this.style.background='#f8fafc';this.style.boxShadow='none'">
-                <button type="button" onclick="removeObjRowView(this)" title="Remove row"
-                        style="width:28px;height:28px;border-radius:6px;border:1px solid transparent;
-                               background:transparent;cursor:pointer;color:#94a3b8;
-                               display:flex;align-items:center;justify-content:center;
-                               transition:all 0.2s ease;flex-shrink:0;"
-                        onmouseenter="this.style.background='#fee2e2';this.style.borderColor='#fecaca';this.style.color='#dc2626'"
-                        onmouseleave="this.style.background='transparent';this.style.borderColor='transparent';this.style.color='#94a3b8'">
-                    <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                    </svg>
-                </button>
-            </div>`;
-        list.appendChild(row);
-        row.querySelector('input').focus();
-    }
-
-    function removeObjRowView(btn) {
-        const list = document.getElementById('objCodeListView');
-        btn.closest('div[style]').remove();
-        if (list.children.length === 0) {
-            const hint = document.getElementById('objViewEmptyHint');
-            if (hint) hint.style.display = '';
-        }
+    function confirmDeleteProc() {
+        const procId = getVal('delete-proc-id'); if (!procId) return;
+        postAjax({ ajax_action: 'delete_procurement', saroId: currentSaroId, procurementId: procId })
+            .then(d => { if (d.success) location.reload(); else alert(d.error || 'Delete failed.'); })
+            .catch(() => alert('Network error.'));
     }
 </script>
 </body>

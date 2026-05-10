@@ -8,22 +8,49 @@ $role     = $_SESSION['role'];
 $initials = $_SESSION['initials'];
 $userId   = (int)$_SESSION['user_id'];
 
-// Handle new password-change request submission
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'request_password') {
-    $reason = trim($_POST['reason'] ?? '');
-    $db   = new Database();
-    $conn = $db->connect();
-    $stmt = $conn->prepare("
-        INSERT INTO password_requests (userId, reason, status)
-        VALUES (?, ?, 'pending')
-    ");
-    $stmt->execute([$userId, $reason ?: null]);
-    header('Location: settings.php?tab=password&req=sent');
-    exit;
+$db   = new Database();
+$conn = $db->connect();
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    $action = $_POST['action'];
+
+    if ($action === 'request_password') {
+        $reason  = trim($_POST['reason'] ?? '');
+        $newPass = trim($_POST['new_password'] ?? '');
+        $stmt = $conn->prepare("
+            INSERT INTO password_requests (userId, reason, requested_new_password, status)
+            VALUES (?, ?, ?, 'pending')
+        ");
+        $stmt->execute([$userId, $reason ?: null, $newPass ?: null]);
+        header('Location: settings.php?tab=password&req=sent');
+        exit;
+    }
+
+    if ($action === 'apply_password') {
+        $requestId = (int)($_POST['request_id'] ?? 0);
+        $stmt = $conn->prepare("
+            SELECT requestId, requested_new_password
+            FROM password_requests
+            WHERE requestId = ? AND userId = ? AND status = 'approved' AND applied_at IS NULL AND requested_new_password IS NOT NULL
+        ");
+        $stmt->execute([$requestId, $userId]);
+        $req = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($req) {
+            $hash = password_hash($req['requested_new_password'], PASSWORD_DEFAULT);
+            $conn->prepare("UPDATE user SET password = ? WHERE userId = ?")->execute([$hash, $userId]);
+            $conn->prepare("UPDATE password_requests SET applied_at = NOW() WHERE requestId = ?")->execute([$requestId]);
+        }
+        header('Location: settings.php?tab=password&applied=1');
+        exit;
+    }
 }
 
-$notifObj    = new Notification();
-$pwRequests  = $notifObj->getUserPasswordRequests($userId);
+$notifObj      = new Notification();
+$pwRequests    = $notifObj->getUserPasswordRequests($userId);
+$notifications = $notifObj->getRecentActivity((int)$_SESSION['user_id'], 10);
+$unreadCount   = $notifObj->countUnread($userId);
+$approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
+$cancelledCount = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='cancelled'")->fetchColumn();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -348,6 +375,14 @@ $pwRequests  = $notifObj->getUserPasswordRequests($userId);
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
             </a>
+            <p class="nav-section-label">History</p>
+            <a href="cancelled_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                Cancelled SAROs
+                <?php if ($cancelledCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#b45309;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $cancelledCount ?></span>
+                <?php endif; ?>
+            </a>
             <p class="nav-section-label">Account</p>
             <a href="settings.php" class="nav-item active">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -383,10 +418,8 @@ $pwRequests  = $notifObj->getUserPasswordRequests($userId);
                 <span class="breadcrumb-active">Settings</span>
             </div>
             <div class="topbar-right">
-                <div class="icon-btn">
-                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-                    <span class="notif-dot"></span>
-                </div>
+                <!-- Notification -->
+                <?php $isAdmin = false; $pendingPwCount = $pendingPwCount ?? 0; $approvedPwReq = $approvedPwReq ?? null; include __DIR__ . '/../includes/notif_dropdown.php'; ?>
                 <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;
                             background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
                     <div style="width:28px;height:28px;border-radius:7px;
@@ -448,10 +481,6 @@ $pwRequests  = $notifObj->getUserPasswordRequests($userId);
                     <a href="#password-section" class="settings-nav-item active" onclick="showSection('password')">
                         <svg class="s-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
                         Change Password
-                    </a>
-                    <a href="#" class="settings-nav-item" onclick="showSection('notif'); return false;">
-                        <svg class="s-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-                        Notifications
                     </a>
                 </div>
 
@@ -547,7 +576,14 @@ $pwRequests  = $notifObj->getUserPasswordRequests($userId);
                                     <span id="errorMsg">Please correct the errors and try again.</span>
                                 </div>
 
-                                <form id="pwRequestForm" novalidate>
+                                <?php if (isset($_GET['req']) && $_GET['req'] === 'sent'): ?>
+                                <div class="alert alert-success" style="display:flex;">
+                                    <svg class="alert-icon" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                    <span>Your password change request has been submitted. The administrator will process it shortly.</span>
+                                </div>
+                                <?php endif; ?>
+                                <form id="pwRequestForm" method="post" action="settings.php" novalidate>
+                                <input type="hidden" name="action" value="request_password">
                                     <div class="form-group">
                                         <label class="form-label">Current Password</label>
                                         <div class="input-wrap">
@@ -565,7 +601,7 @@ $pwRequests  = $notifObj->getUserPasswordRequests($userId);
                                     <div class="form-group">
                                         <label class="form-label">Requested New Password</label>
                                         <div class="input-wrap">
-                                            <input type="password" class="form-input" id="newPassword"
+                                            <input type="password" class="form-input" id="newPassword" name="new_password"
                                                    placeholder="Enter your desired new password"
                                                    oninput="checkStrength(this.value)">
                                             <button type="button" class="eye-btn" onclick="toggleEye('newPassword', this)">
@@ -596,7 +632,7 @@ $pwRequests  = $notifObj->getUserPasswordRequests($userId);
 
                                     <div class="form-group">
                                         <label class="form-label">Reason for Request <span style="color:#94a3b8;font-weight:500;text-transform:none;">(optional)</span></label>
-                                        <textarea class="form-input" id="requestReason" rows="3"
+                                        <textarea class="form-input" id="requestReason" name="reason" rows="3"
                                                   placeholder="e.g. Forgot current password, routine change, suspected compromise…"
                                                   style="resize:vertical;min-height:80px;"></textarea>
                                     </div>
@@ -611,6 +647,55 @@ $pwRequests  = $notifObj->getUserPasswordRequests($userId);
                                 </form>
                             </div>
                         </div>
+
+                        <!-- Apply Approved Password section -->
+                        <?php if ($approvedPwReq): ?>
+                        <div class="card" style="margin-top:20px;border:2px solid #bbf7d0;" id="applyPasswordCard">
+                            <div class="card-header" style="background:#f0fdf4;">
+                                <div class="card-header-icon" style="background:#dcfce7;">
+                                    <svg width="18" height="18" fill="none" stroke="#16a34a" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                </div>
+                                <div>
+                                    <p style="font-size:14px;font-weight:800;color:#15803d;">Password Change Approved!</p>
+                                    <p style="font-size:11px;color:#4ade80;font-weight:500;">Your request has been approved. Apply your new password below.</p>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <?php if (isset($_GET['applied']) && $_GET['applied'] === '1'): ?>
+                                <div class="alert alert-success" style="display:flex;">
+                                    <svg class="alert-icon" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                    <span>Your new password has been applied successfully. Use it on your next login.</span>
+                                </div>
+                                <?php else: ?>
+                                <p style="font-size:13px;color:#475569;margin-bottom:16px;line-height:1.6;">
+                                    Your administrator has approved your password change request. Your new password is shown below. Click <strong>Apply Now</strong> to set it as your active password.
+                                </p>
+                                <div class="form-group">
+                                    <label class="form-label">Your Approved New Password</label>
+                                    <div class="input-wrap">
+                                        <input type="password" class="form-input" id="approvedPwField"
+                                               value="<?= htmlspecialchars($approvedPwReq['requested_new_password']) ?>"
+                                               readonly style="background:#f0fdf4;border-color:#86efac;font-weight:700;color:#15803d;">
+                                        <button type="button" class="eye-btn" onclick="toggleEye('approvedPwField', this)">
+                                            <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24" id="eye-approvedPwField"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                                        </button>
+                                    </div>
+                                    <p class="form-hint">Make sure to remember this password before applying.</p>
+                                </div>
+                                <form method="post" action="settings.php">
+                                    <input type="hidden" name="action" value="apply_password">
+                                    <input type="hidden" name="request_id" value="<?= $approvedPwReq['requestId'] ?>">
+                                    <div style="display:flex;justify-content:flex-end;gap:10px;padding-top:4px;">
+                                        <button type="submit" class="btn btn-primary" style="background:#16a34a;border-color:#16a34a;" onmouseover="this.style.background='#15803d';this.style.borderColor='#15803d'" onmouseout="this.style.background='#16a34a';this.style.borderColor='#16a34a'">
+                                            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                            Apply Now
+                                        </button>
+                                    </div>
+                                </form>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                        <?php endif; ?>
 
                         <!-- Pending requests card -->
                         <div class="card" style="margin-top:20px;">
@@ -631,12 +716,13 @@ $pwRequests  = $notifObj->getUserPasswordRequests($userId);
                                             <th style="padding:10px 20px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#fff;background:#0f172a;text-align:left;">Reason</th>
                                             <th style="padding:10px 20px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#fff;background:#0f172a;text-align:center;">Status</th>
                                             <th style="padding:10px 20px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#fff;background:#0f172a;text-align:left;">Processed By</th>
+                                            <th style="padding:10px 20px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#fff;background:#0f172a;text-align:left;">Admin Note</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         <?php if (empty($pwRequests)): ?>
                                         <tr>
-                                            <td colspan="4" style="padding:24px 20px;text-align:center;font-size:12px;color:#94a3b8;">No password requests submitted yet.</td>
+                                            <td colspan="5" style="padding:24px 20px;text-align:center;font-size:12px;color:#94a3b8;">No password requests submitted yet.</td>
                                         </tr>
                                         <?php else: ?>
                                         <?php foreach ($pwRequests as $req):
@@ -665,6 +751,13 @@ $pwRequests  = $notifObj->getUserPasswordRequests($userId);
                                                 </span>
                                             </td>
                                             <td style="padding:12px 20px;font-size:12px;color:#475569;"><?= $resolverName ?></td>
+                                            <td style="padding:12px 20px;font-size:12px;color:#475569;">
+                                                <?php if (in_array($req['status'], ['approved','rejected']) && !empty($req['admin_note'])): ?>
+                                                    <?= htmlspecialchars($req['admin_note']) ?>
+                                                <?php else: ?>
+                                                    <span style="color:#cbd5e1;">—</span>
+                                                <?php endif; ?>
+                                            </td>
                                         </tr>
                                         <?php endforeach; ?>
                                         <?php endif; ?>
@@ -674,25 +767,6 @@ $pwRequests  = $notifObj->getUserPasswordRequests($userId);
                         </div>
                     </div>
 
-                    <!-- Notifications section -->
-                    <div id="section-notif" style="display:none;">
-                        <div class="card">
-                            <div class="card-header">
-                                <div class="card-header-icon" style="background:#eff6ff;">
-                                    <svg width="18" height="18" fill="none" stroke="#1d4ed8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-                                </div>
-                                <div>
-                                    <p style="font-size:14px;font-weight:800;color:#0f172a;">Notification Preferences</p>
-                                    <p style="font-size:11px;color:#94a3b8;font-weight:500;">Configure how you receive alerts</p>
-                                </div>
-                            </div>
-                            <div class="card-body">
-                                <p style="font-size:13px;color:#94a3b8;font-weight:500;text-align:center;padding:24px 0;">
-                                    Notification settings will be available in a future update.
-                                </p>
-                            </div>
-                        </div>
-                    </div>
 
                 </div><!-- end right col -->
             </div><!-- end settings-grid -->
@@ -703,13 +777,23 @@ $pwRequests  = $notifObj->getUserPasswordRequests($userId);
 <script>
     /* ── Section switcher ── */
     function showSection(name) {
-        ['profile','password','notif'].forEach(s => {
+        ['profile','password'].forEach(s => {
             document.getElementById('section-' + s).style.display = s === name ? '' : 'none';
         });
         document.querySelectorAll('.settings-nav-item').forEach((el, i) => {
-            el.classList.toggle('active', i === ['profile','password','notif'].indexOf(name));
+            el.classList.toggle('active', i === ['profile','password'].indexOf(name));
         });
     }
+
+    // Auto-open password tab if ?apply=1 or ?applied=1
+    (function() {
+        const p = new URLSearchParams(window.location.search);
+        if (p.get('apply') === '1' || p.get('applied') === '1') {
+            showSection('password');
+            const card = document.getElementById('applyPasswordCard');
+            if (card) setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
+        }
+    })();
 
     /* ── Password visibility toggle ── */
     function toggleEye(fieldId, btn) {
@@ -753,42 +837,26 @@ $pwRequests  = $notifObj->getUserPasswordRequests($userId);
 
     /* ── Form submission ── */
     document.getElementById('pwRequestForm').addEventListener('submit', function(e) {
-        e.preventDefault();
-        const current = document.getElementById('currentPassword').value.trim();
         const newPw   = document.getElementById('newPassword').value;
         const confirm = document.getElementById('confirmPassword').value;
 
-        document.getElementById('successAlert').style.display = 'none';
-        document.getElementById('errorAlert').style.display   = 'none';
+        document.getElementById('errorAlert').style.display = 'none';
 
-        if (!current) {
-            showError('Please enter your current password.');
+        if (newPw && newPw.length < 6) {
+            e.preventDefault();
+            showError('Requested new password must be at least 6 characters long.');
             return;
         }
-        if (newPw.length < 6) {
-            showError('New password must be at least 6 characters long.');
-            return;
-        }
-        if (newPw !== confirm) {
+        if (newPw && newPw !== confirm) {
+            e.preventDefault();
             showError('New password and confirm password do not match.');
-            return;
-        }
-        if (newPw === current) {
-            showError('New password must be different from your current password.');
             return;
         }
 
         const btn = document.getElementById('submitBtn');
         btn.disabled = true;
         btn.innerHTML = `<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="animation:spin 1s linear infinite;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Submitting…`;
-
-        setTimeout(function() {
-            document.getElementById('successAlert').style.display = 'flex';
-            document.getElementById('pwRequestForm').reset();
-            checkStrength('');
-            btn.disabled = false;
-            btn.innerHTML = `<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg> Submit Request`;
-        }, 1200);
+        // form will now submit naturally via POST
     });
 
     function showError(msg) {
@@ -807,6 +875,8 @@ $pwRequests  = $notifObj->getUserPasswordRequests($userId);
     const style = document.createElement('style');
     style.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
     document.head.appendChild(style);
+
+    // Notification dropdown
 </script>
 </body>
 </html>

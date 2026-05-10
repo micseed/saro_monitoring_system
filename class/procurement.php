@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/Database.php';
+require_once __DIR__ . '/database.php';
 
 class Procurement extends Database {
 
@@ -9,10 +9,10 @@ class Procurement extends Database {
             $stmt = $conn->prepare("
                 INSERT INTO procurement
                     (objectId, pro_act, is_travelExpense, quantity, unit, unit_cost,
-                     obligated_amount, period_start, period_end, proc_date, remarks)
+                     obligated_amount, period_start, period_end, proc_date, remarks, status)
                 VALUES
                     (:objectId, :pro_act, :is_travelExpense, :quantity, :unit, :unit_cost,
-                     :obligated_amount, :period_start, :period_end, :proc_date, :remarks)
+                     :obligated_amount, :period_start, :period_end, :proc_date, :remarks, :status)
             ");
             $stmt->execute([
                 ':objectId'         => $data['objectId'],
@@ -26,6 +26,7 @@ class Procurement extends Database {
                 ':period_end'       => $data['period_end']       ?: null,
                 ':proc_date'        => $data['proc_date']        ?: null,
                 ':remarks'          => $data['remarks']          ?: null,
+                ':status'           => $data['status']           ?? 'on_process',
             ]);
             return ['success' => true, 'id' => (int)$conn->lastInsertId()];
         } catch (PDOException $e) {
@@ -47,7 +48,8 @@ class Procurement extends Database {
                     period_start     = :period_start,
                     period_end       = :period_end,
                     proc_date        = :proc_date,
-                    remarks          = :remarks
+                    remarks          = :remarks,
+                    status           = :status
                 WHERE procurementId = :id
             ");
             $stmt->execute([
@@ -62,6 +64,7 @@ class Procurement extends Database {
                 ':period_end'       => $data['period_end']       ?: null,
                 ':proc_date'        => $data['proc_date']        ?: null,
                 ':remarks'          => $data['remarks']          ?: null,
+                ':status'           => $data['status']           ?? 'on_process',
             ]);
             return ['success' => true];
         } catch (PDOException $e) {

@@ -23,6 +23,13 @@ $saroChartData = $admin->getSaroChartData(5);
 $username = $_SESSION['full_name'] ?? 'Admin User';
 $role     = $_SESSION['role'] ?? 'Admin';
 $initials = $_SESSION['initials'] ?? 'AD';
+$adminId  = (int)($_SESSION['user_id'] ?? 0);
+
+require_once __DIR__ . '/../class/notification.php';
+$notifObj      = new Notification();
+$notifications = $notifObj->getRecentActivity((int)$adminId, 10);
+$unreadCount   = $notifObj->countUnread($adminId);
+$pendingPwCount = $notifObj->countPendingPasswordRequests();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -218,12 +225,8 @@ $initials = $_SESSION['initials'] ?? 'AD';
                 <span class="breadcrumb-active">Dashboard</span>
             </div>
             <div class="topbar-right">
-                <div class="icon-btn">
-                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-                    <?php if($stats['pending_requests'] > 0): ?>
-                        <span class="notif-dot"></span>
-                    <?php endif; ?>
-                </div>
+                <!-- Notification -->
+                <?php $isAdmin = true; $pendingPwCount = $pendingPwCount ?? 0; $approvedPwReq = $approvedPwReq ?? null; include __DIR__ . '/../includes/notif_dropdown.php'; ?>
                 <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
                     <div style="width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#dc2626,#b91c1c);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff;"><?= htmlspecialchars($initials) ?></div>
                     <div>

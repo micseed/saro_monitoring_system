@@ -15,6 +15,7 @@ $accountObj = new Account($pdo);
 $username = $_SESSION['full_name'] ?? 'User';
 $role     = $_SESSION['role'] ?? 'Role';
 $initials = $_SESSION['initials'] ?? 'U';
+$userId   = (int)($_SESSION['user_id'] ?? 0);
 
 // Fetch dynamic data — Admin users only, Super Admin excluded
 $users = $accountObj->getAdminOnlyUsers();
@@ -31,6 +32,13 @@ foreach ($users as $u) {
         $activeToday++;
     }
 }
+
+require_once __DIR__ . '/../class/notification.php';
+$notifObj      = new Notification();
+$notifications = $notifObj->getRecentActivity((int)$_SESSION['user_id'], 10);
+$unreadCount   = $notifObj->countUnread($userId);
+$approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
+$cancelledCount = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='cancelled'")->fetchColumn();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -247,14 +255,13 @@ foreach ($users as $u) {
             padding: 3px 9px; border-radius: 6px;
             font-size: 10px; font-weight: 700; white-space: nowrap; text-transform: capitalize;
         }
-        .action-login   { background: #eff6ff; color: #1d4ed8; }
-        .action-create  { background: #f0fdf4; color: #15803d; }
-        .action-edit    { background: #fef9c3; color: #b45309; }
-        .action-delete  { background: #fee2e2; color: #dc2626; }
-        .action-view    { background: #f5f3ff; color: #6d28d9; }
-        .action-approve { background: #dcfce7; color: #16a34a; }
-        .action-reject  { background: #fee2e2; color: #dc2626; }
-        .action-logout  { background: #f1f5f9; color: #475569; }
+        .action-login     { background: #eff6ff; color: #1d4ed8; }
+        .action-create    { background: #f0fdf4; color: #15803d; }
+        .action-edit      { background: #fef9c3; color: #b45309; }
+        .action-delete    { background: #fee2e2; color: #dc2626; }
+        .action-view      { background: #f5f3ff; color: #6d28d9; }
+        .action-cancelled { background: #fee2e2; color: #dc2626; }
+        .action-logout    { background: #f1f5f9; color: #475569; }
 
         /* User avatar small */
         .u-avatar {
@@ -313,6 +320,14 @@ foreach ($users as $u) {
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
             </a>
+            <p class="nav-section-label">History</p>
+            <a href="cancelled_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                Cancelled SAROs
+                <?php if ($cancelledCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#b45309;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $cancelledCount ?></span>
+                <?php endif; ?>
+            </a>
             <p class="nav-section-label">Account</p>
             <a href="settings.php" class="nav-item">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -348,10 +363,8 @@ foreach ($users as $u) {
                 <span class="breadcrumb-active">Activity Logs</span>
             </div>
             <div class="topbar-right">
-                <div class="icon-btn">
-                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-                    <span class="notif-dot"></span>
-                </div>
+                <!-- Notification -->
+                <?php $isAdmin = false; $pendingPwCount = $pendingPwCount ?? 0; $approvedPwReq = $approvedPwReq ?? null; include __DIR__ . '/../includes/notif_dropdown.php'; ?>
                 <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;
                             background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
                     <div style="width:28px;height:28px;border-radius:7px;
@@ -533,10 +546,28 @@ foreach ($users as $u) {
                                     <tr><td colspan="5" style="text-align:center;padding:20px;color:#94a3b8;">No activity logs found.</td></tr>
                                 <?php else: ?>
                                     <?php foreach($logs as $l): 
-                                        $logTime = strtotime($l['timestamp']);
+                                        $logTime = strtotime($l['created_at']);
                                         $actionClass = 'action-' . strtolower($l['action']);
                                         $actorName = $l['first_name'] ? ($l['first_name'] . ' ' . $l['last_name']) : 'System / Deleted User';
-                                        
+
+                                        $tableMap = [
+                                            'saro'        => 'SARO',
+                                            'procurement' => 'Procurement Activity',
+                                            'object_code' => 'Object Code',
+                                        ];
+                                        $tbl = strtolower($l['affected_table'] ?? '');
+                                        $tableLabel = $tableMap[$tbl] ?? ucfirst($tbl);
+                                        $actionLabel = match($l['action']) {
+                                            'login'     => 'Logged In',
+                                            'logout'    => 'Logged Out',
+                                            'create'    => 'Created ' . $tableLabel,
+                                            'edit'      => 'Edited ' . $tableLabel,
+                                            'delete'    => 'Deleted ' . $tableLabel,
+                                            'view'      => 'Viewed ' . $tableLabel,
+                                            'cancelled' => 'Cancelled Procurement Activity',
+                                            default     => ucfirst($l['action']),
+                                        };
+
                                         $targetRef = '—';
                                         if (!empty($l['affected_table']) && !empty($l['record_id'])) {
                                             $targetRef = htmlspecialchars(ucfirst($l['affected_table']) . ' ID: ' . $l['record_id']);
@@ -548,7 +579,7 @@ foreach ($users as $u) {
                                             <p style="font-size:10px;color:#94a3b8;font-weight:500;"><?= date('h:i A', $logTime) ?></p>
                                         </td>
                                         <td style="font-size:12px;font-weight:600;color:#334155;white-space:nowrap;"><?= htmlspecialchars($actorName) ?></td>
-                                        <td style="text-align:center;"><span class="action-pill <?= htmlspecialchars($actionClass) ?>"><?= htmlspecialchars($l['action']) ?></span></td>
+                                        <td style="text-align:center;"><span class="action-pill <?= htmlspecialchars($actionClass) ?>"><?= htmlspecialchars($actionLabel) ?></span></td>
                                         <td style="font-size:11px;color:#64748b;"><?= htmlspecialchars($l['details']) ?></td>
                                         <td>
                                             <?php if($targetRef !== '—'): ?>
@@ -586,5 +617,7 @@ foreach ($users as $u) {
         </div><!-- /content -->
     </main>
 </div>
+<script>
+</script>
 </body>
 </html>

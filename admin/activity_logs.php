@@ -1,15 +1,22 @@
 <?php
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../class/database.php';
+require_once __DIR__ . '/../class/notification.php';
 
 $username = $_SESSION['full_name'];
 $role     = $_SESSION['role'];
 $initials = $_SESSION['initials'];
+$adminId  = (int)($_SESSION['user_id'] ?? 0);
 
 $db  = new Database();
 $pdo = $db->connect();
 $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+
+$notifObj      = new Notification();
+$notifications = $notifObj->getRecentActivity((int)$adminId, 10);
+$unreadCount   = $notifObj->countUnread($adminId);
+$pendingPwCount = $notifObj->countPendingPasswordRequests();
 
 // Fetch all users (all roles visible in admin panel)
 $allUsers = $pdo->query("
@@ -24,7 +31,7 @@ $logs = $pdo->query("
     SELECT a.*, u.first_name, u.last_name
     FROM audit_logs a
     LEFT JOIN user u ON a.userId = u.userId
-    ORDER BY a.timestamp DESC
+    ORDER BY a.created_at DESC
     LIMIT 100
 ")->fetchAll();
 
@@ -242,10 +249,7 @@ $pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHER
                 <span class="breadcrumb-active">Activity Logs</span>
             </div>
             <div class="topbar-right">
-                <div class="icon-btn">
-                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-                    <span class="notif-dot"></span>
-                </div>
+                <?php $isAdmin = true; $pendingPwCount = $pendingPwCount ?? 0; $approvedPwReq = $approvedPwReq ?? null; include __DIR__ . '/../includes/notif_dropdown.php'; ?>
                 <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
                     <div style="width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#dc2626,#b91c1c);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff;"><?= htmlspecialchars($initials) ?></div>
                     <div>
@@ -406,7 +410,7 @@ $pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHER
                                 <?php if (empty($logs)): ?>
                                 <tr><td colspan="5" style="text-align:center;padding:24px;color:#94a3b8;font-size:12px;">No activity logs found.</td></tr>
                                 <?php else: foreach ($logs as $l):
-                                    $logTs      = strtotime($l['timestamp']);
+                                    $logTs      = strtotime($l['created_at']);
                                     $logDate    = date('M j, Y', $logTs);
                                     $logTime    = date('h:i A', $logTs);
                                     $action     = $l['action'] ?? 'Unknown';
@@ -416,7 +420,8 @@ $pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHER
                                     $actorName  = $actorFirst ? htmlspecialchars($actorFirst . ' ' . $actorLast) : 'System / Deleted User';
                                     $actorInit  = $actorFirst ? strtoupper(substr($actorFirst,0,1) . substr($actorLast,0,1)) : 'SYS';
                                     $details    = htmlspecialchars($l['details'] ?? '');
-                                    $targetRef  = $l['target_ref'] ?? '';
+                                    $targetRef = (!empty($l['affected_table']) && !empty($l['record_id']))
+                                                   ? ucfirst($l['affected_table']) . ' #' . $l['record_id'] : '';
                                     $avatarColors = ['#2563eb,#1d4ed8','#16a34a,#15803d','#dc2626,#b91c1c','#7c3aed,#6d28d9','#0891b2,#0e7490','#d97706,#b45309'];
                                     $colorIdx   = $actorFirst ? (crc32($actorFirst . $actorLast) % count($avatarColors)) : 0;
                                     $avatarColor = $avatarColors[abs($colorIdx)];

@@ -8,23 +8,29 @@ require_once __DIR__ . '/../class/Database.php';
 $username = $_SESSION['full_name'] ?? 'User';
 $role     = $_SESSION['role'] ?? 'Role';
 $initials = $_SESSION['initials'] ?? 'U';
+$userId   = (int)($_SESSION['user_id'] ?? 0);
 
 $db = new Database();
 $conn = $db->connect();
 
 // Fetch SAROs and sum up their obligated amounts from related procurements
 $sql = "
-    SELECT 
+    SELECT
         s.saroId, s.saroNo, s.saro_title, s.total_budget, s.status,
-        COALESCE(SUM(COALESCE(p.obligated_amount, p.unit_cost * p.quantity)), 0) AS total_obligated
+        COALESCE(SUM(CASE WHEN p.status = 'obligated' THEN p.unit_cost * p.quantity ELSE 0 END), 0) AS total_obligated
     FROM saro s
     LEFT JOIN object_code oc ON s.saroId = oc.saroId
     LEFT JOIN procurement p ON oc.objectId = p.objectId
+    WHERE s.status = 'active'
     GROUP BY s.saroId
-    ORDER BY s.created_at DESC
+    ORDER BY s.created_at ASC
 ";
 $stmt = $conn->query($sql);
 $saros = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$cancelledCount = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='cancelled'")->fetchColumn();
+$obligatedCount = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='obligated'")->fetchColumn();
+$lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lapsed'")->fetchColumn();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -205,6 +211,28 @@ $saros = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
             </a>
+            <p class="nav-section-label">History</p>
+            <a href="cancelled_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                Cancelled SAROs
+                <?php if ($cancelledCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#b45309;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $cancelledCount ?></span>
+                <?php endif; ?>
+            </a>
+            <a href="obligated_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Obligated SAROs
+                <?php if ($obligatedCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#16a34a;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $obligatedCount ?></span>
+                <?php endif; ?>
+            </a>
+            <a href="lapsed_saro.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Lapsed SAROs
+                <?php if ($lapsedCount > 0): ?>
+                <span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#dc2626;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $lapsedCount ?></span>
+                <?php endif; ?>
+            </a>
             <p class="nav-section-label">Account</p>
             <a href="settings.php" class="nav-item">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -238,10 +266,8 @@ $saros = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <span class="breadcrumb-active">Procurement Status</span>
             </div>
             <div class="topbar-right">
-                <div class="icon-btn">
-                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-                    <span class="notif-dot"></span>
-                </div>
+                <!-- Notification -->
+                <?php $isAdmin = false; $pendingPwCount = $pendingPwCount ?? 0; $approvedPwReq = $approvedPwReq ?? null; include __DIR__ . '/../includes/notif_dropdown.php'; ?>
                 <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;
                             background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
                     <div style="width:28px;height:28px;border-radius:7px;
@@ -350,5 +376,7 @@ $saros = $stmt->fetchAll(PDO::FETCH_ASSOC);
         </div>
     </main>
 </div>
+<script>
+</script>
 </body>
 </html>
