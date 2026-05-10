@@ -16,9 +16,90 @@ if (!empty($_POST['ajax_action'])) {
     $saroId = (int)($_POST['saroId'] ?? 0);
     $userId = (int)($_SESSION['user_id'] ?? 0);
 
+    /** @return ?string yyyy-mm-dd or null when column empty */
+    $fetchSaroValidUntil = static function (PDO $conn, int $id): ?string {
+        $st = $conn->prepare('SELECT valid_until FROM saro WHERE saroId = ?');
+        $st->execute([$id]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        $v = $row['valid_until'] ?? null;
+        return ($v !== null && $v !== '') ? (string)$v : null;
+    };
+
+    /** Period + activity date cannot extend past SARO validity; period start must precede/end with period end. */
+    $procurementScheduleViolation = static function (?string $validUntil, ?string $periodStart, ?string $periodEnd, ?string $procDate): ?string {
+        if ($periodStart && $periodEnd) {
+            $tS = strtotime($periodStart);
+            $tE = strtotime($periodEnd);
+            if ($tS !== false && $tE !== false && $tS > $tE) {
+                return 'Procurement period start must fall on or before the period end.';
+            }
+        }
+        $vu = trim((string)($validUntil ?? ''));
+        if ($vu === '') {
+            return null;
+        }
+        $fmt = static function (?string $d): string {
+            if (!$d) {
+                return '';
+            }
+            $t = strtotime($d . (strlen($d) <= 10 ? ' 12:00:00' : ''));
+            return $t ? date('M j, Y', $t) : $d;
+        };
+        $tV = strtotime($vu . ' 23:59:59');
+        if ($tV === false) {
+            return null;
+        }
+        $vuLbl = $fmt($vu);
+        if ($periodStart) {
+            $t = strtotime($periodStart . ' 00:00:00');
+            if ($t !== false && $t > $tV) {
+                return 'Procurement period begins on ' . $fmt($periodStart) . ', which is after the SARO valid-until date (' . $vuLbl . '). Shift the period or extend SARO validity.';
+            }
+        }
+        if ($periodEnd) {
+            $t = strtotime($periodEnd . ' 23:59:59');
+            if ($t !== false && $t > $tV) {
+                return 'Procurement period ends on ' . $fmt($periodEnd) . '. The entire period must end on or before the SARO valid-until date (' . $vuLbl . ').';
+            }
+        }
+        if ($procDate) {
+            $t = strtotime($procDate . ' 23:59:59');
+            if ($t !== false && $t > $tV) {
+                return 'Procurement activity date (' . $fmt($procDate) . ') cannot be after the SARO valid-until date (' . $vuLbl . ').';
+            }
+        }
+
+        return null;
+    };
+
+    $procurementBelongsToSaro = static function (PDO $conn, int $procId, int $saro): bool {
+        $st = $conn->prepare('SELECT 1 FROM procurement p INNER JOIN object_code oc ON p.objectId = oc.objectId WHERE p.procurementId = ? AND oc.saroId = ?');
+        $st->execute([$procId, $saro]);
+
+        return (bool)$st->fetchColumn();
+    };
+    $objectCodeBelongsToSaro = static function (PDO $conn, int $objectId, int $saro): bool {
+        $st = $conn->prepare('SELECT 1 FROM object_code WHERE objectId = ? AND saroId = ?');
+        $st->execute([$objectId, $saro]);
+        return (bool)$st->fetchColumn();
+    };
+    $isSaroOwner = static function (PDO $conn, int $saro, int $uid): bool {
+        if ($saro <= 0 || $uid <= 0) return false;
+        $st = $conn->prepare('SELECT 1 FROM saro WHERE saroId = ? AND userId = ?');
+        $st->execute([$saro, $uid]);
+        return (bool)$st->fetchColumn();
+    };
     switch ($_POST['ajax_action']) {
 
         case 'add_procurement': {
+            if (!$saroId) {
+                echo json_encode(['success' => false, 'error' => 'Missing SARO.']);
+                break;
+            }
+            if (!$isSaroOwner($conn, $saroId, $userId)) {
+                echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can add procurement activities.']);
+                break;
+            }
             $psm = $_POST['period_start_month'] ?? '';
             $psy = $_POST['period_start_year']  ?? '';
             $pem = $_POST['period_end_month']   ?? '';
@@ -29,6 +110,14 @@ if (!empty($_POST['ajax_action'])) {
             $qty         = max(1, (int)($_POST['quantity']  ?? 1));
             $unitCost    = (float)($_POST['unit_cost']      ?? 0);
             $proActName  = trim($_POST['pro_act'] ?? '');
+            $procDateRaw = trim((string)($_POST['proc_date'] ?? ''));
+
+            $vuRow = $fetchSaroValidUntil($conn, $saroId);
+            $vio   = $procurementScheduleViolation($vuRow, $periodStart, $periodEnd, $procDateRaw !== '' ? $procDateRaw : null);
+            if ($vio !== null) {
+                echo json_encode(['success' => false, 'error' => $vio, 'code' => 'valid_until_period']);
+                break;
+            }
 
             $stmt = $conn->prepare("
                 INSERT INTO procurement
@@ -41,7 +130,7 @@ if (!empty($_POST['ajax_action'])) {
                 $proActName, $isTravel, $qty,
                 $_POST['unit'] ?: null, $unitCost, $unitCost * $qty,
                 $periodStart, $periodEnd,
-                $_POST['proc_date'] ?: null,
+                $procDateRaw !== '' ? $procDateRaw : null,
                 $_POST['remarks']   ?: null,
                 'on_process',
             ]);
@@ -59,14 +148,31 @@ if (!empty($_POST['ajax_action'])) {
 
         case 'edit_procurement': {
             $procId = (int)($_POST['procurementId'] ?? 0);
+            if (!$isSaroOwner($conn, $saroId, $userId)) {
+                echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can update procurement activities.']);
+                break;
+            }
+            if (!$procId || !$saroId || !$procurementBelongsToSaro($conn, $procId, $saroId)) {
+                echo json_encode(['success' => false, 'error' => 'Procurement not found for this SARO.']);
+                break;
+            }
             $psm = $_POST['period_start_month'] ?? ''; $psy = $_POST['period_start_year'] ?? '';
             $pem = $_POST['period_end_month']   ?? ''; $pey = $_POST['period_end_year']   ?? '';
             $periodStart = ($psm && $psy) ? date('Y-m-01', strtotime("$psm $psy")) : null;
             $periodEnd   = ($pem && $pey) ? date('Y-m-t',  strtotime("$pem $pey")) : null;
             $qty = max(1,(int)($_POST['quantity'] ?? 1)); $unitCost = (float)($_POST['unit_cost'] ?? 0);
             $editProActName = trim($_POST['pro_act'] ?? '');
+            $procDateEdit = trim((string)($_POST['proc_date'] ?? ''));
+
+            $vuEdit = $fetchSaroValidUntil($conn, $saroId);
+            $vioE   = $procurementScheduleViolation($vuEdit, $periodStart, $periodEnd, $procDateEdit !== '' ? $procDateEdit : null);
+            if ($vioE !== null) {
+                echo json_encode(['success' => false, 'error' => $vioE, 'code' => 'valid_until_period']);
+                break;
+            }
+
             $conn->prepare("UPDATE procurement SET pro_act=?,quantity=?,unit=?,unit_cost=?,obligated_amount=?,period_start=?,period_end=?,proc_date=?,remarks=? WHERE procurementId=?")
-                 ->execute([$editProActName,$qty,$_POST['unit']?:null,$unitCost,$unitCost*$qty,$periodStart,$periodEnd,$_POST['proc_date']?:null,$_POST['remarks']?:null,$procId]);
+                 ->execute([$editProActName,$qty,$_POST['unit']?:null,$unitCost,$unitCost*$qty,$periodStart,$periodEnd,$procDateEdit !== '' ? $procDateEdit : null,$_POST['remarks']?:null,$procId]);
 
             // Audit log: procurement activity edited
             $ip = $_SERVER['REMOTE_ADDR'] ?? null;
@@ -80,6 +186,14 @@ if (!empty($_POST['ajax_action'])) {
 
         case 'edit_remarks': {
             $procId  = (int)($_POST['procurementId'] ?? 0);
+            if (!$isSaroOwner($conn, $saroId, $userId)) {
+                echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can edit remarks.']);
+                break;
+            }
+            if (!$procId || !$saroId || !$procurementBelongsToSaro($conn, $procId, $saroId)) {
+                echo json_encode(['success' => false, 'error' => 'Procurement not found for this SARO.']);
+                break;
+            }
             $remarks = trim($_POST['remarks'] ?? '') ?: null;
             $conn->prepare("UPDATE procurement SET remarks=? WHERE procurementId=?")
                  ->execute([$remarks, $procId]);
@@ -89,6 +203,14 @@ if (!empty($_POST['ajax_action'])) {
 
         case 'delete_procurement': {
             $delProcId = (int)($_POST['procurementId'] ?? 0);
+            if (!$isSaroOwner($conn, $saroId, $userId)) {
+                echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can delete procurement activities.']);
+                break;
+            }
+            if (!$delProcId || !$saroId || !$procurementBelongsToSaro($conn, $delProcId, $saroId)) {
+                echo json_encode(['success' => false, 'error' => 'Procurement not found for this SARO.']);
+                break;
+            }
             // Fetch name before deleting for the audit message
             $delStmt = $conn->prepare("SELECT pro_act FROM procurement WHERE procurementId=?");
             $delStmt->execute([$delProcId]);
@@ -108,6 +230,10 @@ if (!empty($_POST['ajax_action'])) {
         }
 
         case 'edit_saro': {
+            if (!$isSaroOwner($conn, $saroId, $userId)) {
+                echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can update this SARO.']);
+                break;
+            }
             $dateReleased = !empty($_POST['date_released']) ? strip_tags($_POST['date_released']) : null;
             $validUntil   = !empty($_POST['valid_until'])   ? strip_tags($_POST['valid_until'])   : null;
             $saroTitle    = strip_tags(trim($_POST['saro_title'] ?? ''));
@@ -120,6 +246,10 @@ if (!empty($_POST['ajax_action'])) {
         case 'add_object_codes': {
             $items = json_decode($_POST['items'] ?? '[]', true);
             if (!$saroId || empty($items)) { echo json_encode(['success'=>false,'error'=>'No data']); break; }
+            if (!$isSaroOwner($conn, $saroId, $userId)) {
+                echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can add object codes.']);
+                break;
+            }
             $stO = $conn->prepare("INSERT INTO object_code (saroId,code,projected_cost,is_travelExpense) VALUES (?,?,?,?)");
             $stI = $conn->prepare("INSERT INTO expense_items (objectId,item_name) VALUES (?,?)");
             $conn->beginTransaction();
@@ -152,6 +282,14 @@ if (!empty($_POST['ajax_action'])) {
 
         case 'edit_object_code': {
             $oid     = (int)($_POST['objectId']??0);
+            if (!$isSaroOwner($conn, $saroId, $userId)) {
+                echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can update object codes.']);
+                break;
+            }
+            if (!$oid || !$saroId || !$objectCodeBelongsToSaro($conn, $oid, $saroId)) {
+                echo json_encode(['success' => false, 'error' => 'Object code not found for this SARO.']);
+                break;
+            }
             $newCode = strip_tags(trim($_POST['code']??''));
             $conn->prepare("UPDATE object_code SET code=?,projected_cost=? WHERE objectId=?")->execute([$newCode, (float)($_POST['projected_cost']??0), $oid]);
             $conn->prepare("DELETE FROM expense_items WHERE objectId=?")->execute([$oid]);
@@ -169,6 +307,14 @@ if (!empty($_POST['ajax_action'])) {
 
         case 'delete_object_code': {
             $delOid = (int)($_POST['objectId']??0);
+            if (!$isSaroOwner($conn, $saroId, $userId)) {
+                echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can delete object codes.']);
+                break;
+            }
+            if (!$delOid || !$saroId || !$objectCodeBelongsToSaro($conn, $delOid, $saroId)) {
+                echo json_encode(['success' => false, 'error' => 'Object code not found for this SARO.']);
+                break;
+            }
             // Fetch code before deleting for the audit message
             $delObjStmt = $conn->prepare("SELECT code FROM object_code WHERE objectId=?");
             $delObjStmt->execute([$delOid]);
@@ -218,6 +364,8 @@ $saro = $stmtSaro->fetch(PDO::FETCH_ASSOC);
 if (!$saro) {
     die("SARO record not found.");
 }
+$currentUserId = (int)($_SESSION['user_id'] ?? 0);
+$canManageSaro = ((int)($saro['userId'] ?? 0) === $currentUserId);
 
 // 2. Fetch Object Codes and related expense items
 $stmtObj = $conn->prepare("
@@ -237,12 +385,13 @@ $objectCodes = $stmtObj->fetchAll(PDO::FETCH_ASSOC);
 $travelDocs = $conn->query("SELECT documentId, document_name FROM required_documents WHERE applies_to_travel=1 ORDER BY sort_order")->fetchAll(PDO::FETCH_ASSOC);
 
 // Pass object-code data to JS
+$jsonEmbedFlags = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
 $objCodesJson = json_encode(array_map(fn($oc) => [
     'objectId'        => (int)$oc['objectId'],
     'code'            => $oc['code'],
     'is_travelExpense'=> (bool)(int)$oc['is_travelExpense'],
     'projected_cost'  => (float)$oc['projected_cost'],
-], $objectCodes));
+], $objectCodes), $jsonEmbedFlags);
 
 // Notifications for topbar
 $notifObj      = new Notification();
@@ -266,6 +415,89 @@ $allProcurements = $stmtProc->fetchAll(PDO::FETCH_ASSOC);
 
 $procurements          = array_values(array_filter($allProcurements, fn($p) => ($p['status'] ?? 'on_process') !== 'cancelled'));
 $cancelledProcurements = array_values(array_filter($allProcurements, fn($p) => ($p['status'] ?? 'on_process') === 'cancelled'));
+
+$calTitleTrunc = static function (string $s, int $max = 40): string {
+    $t = trim($s);
+    if ($t === '') {
+        return '';
+    }
+    if (function_exists('mb_strlen') && mb_strlen($t) > $max) {
+        return mb_substr($t, 0, $max - 1) . '…';
+    }
+    if (!function_exists('mb_strlen') && strlen($t) > $max) {
+        return substr($t, 0, $max - 1) . '…';
+    }
+    return $t;
+};
+
+/** Events for FullCalendar: valid-until, release date, procurement period ranges, activity (proc) dates */
+$calendarEvents = [];
+if (!empty($saro['valid_until'])) {
+    $calendarEvents[] = [
+        'title' => 'SARO valid until',
+        'start' => date('Y-m-d', strtotime($saro['valid_until'])),
+        'allDay' => true,
+        'color' => '#ef4444',
+    ];
+}
+if (!empty($saro['date_released'])) {
+    $calendarEvents[] = [
+        'title' => 'SARO date released',
+        'start' => date('Y-m-d', strtotime($saro['date_released'])),
+        'allDay' => true,
+        'color' => '#64748b',
+    ];
+}
+foreach ($procurements as $p) {
+    $actRaw   = isset($p['pro_act']) ? (string)$p['pro_act'] : 'Activity';
+    $actShort = $calTitleTrunc($actRaw);
+    if (!empty($p['period_start']) && !empty($p['period_end'])) {
+        // Foreground span (not background) so FullCalendar stacks lanes and respects dayMaxEvents
+        $calendarEvents[] = [
+            'title'      => 'Period: ' . $actShort,
+            'start'      => date('Y-m-d', strtotime($p['period_start'])),
+            'end'        => date('Y-m-d', strtotime($p['period_end'] . ' +1 day')),
+            'allDay'     => true,
+            'color'      => '#e9d5ff',
+            'textColor'  => '#4c1d95',
+            'classNames' => ['fc-ev-period-span'],
+            'extendedProps' => ['kind' => 'period-span'],
+        ];
+    } else {
+        if (!empty($p['period_start'])) {
+            $calendarEvents[] = [
+                'title'      => 'Period start: ' . $actShort,
+                'start'      => date('Y-m-d', strtotime($p['period_start'])),
+                'allDay'     => true,
+                'color'      => '#c4b5fd',
+                'textColor'  => '#3730a3',
+                'classNames' => ['fc-ev-period'],
+            ];
+        }
+        if (!empty($p['period_end'])) {
+            $calendarEvents[] = [
+                'title'      => 'Period end: ' . $actShort,
+                'start'      => date('Y-m-d', strtotime($p['period_end'])),
+                'allDay'     => true,
+                'color'      => '#a78bfa',
+                'textColor'  => '#312e81',
+                'classNames' => ['fc-ev-period'],
+            ];
+        }
+    }
+    if (!empty($p['proc_date'])) {
+        $calendarEvents[] = [
+            'title'      => 'Activity date: ' . $actShort,
+            'start'      => date('Y-m-d', strtotime($p['proc_date'])),
+            'allDay'     => true,
+            'color'      => '#3b82f6',
+            'textColor'  => '#ffffff',
+            'classNames' => ['fc-ev-proc-date'],
+            'extendedProps' => ['kind' => 'proc-date'],
+        ];
+    }
+}
+$calendarEventsJson = json_encode($calendarEvents, $jsonEmbedFlags);
 
 // Calculations
 $totalBudget = (float)$saro['total_budget'];
@@ -552,14 +784,26 @@ if ($bur < 25) {
         .period-pair { display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px; }
         .period-label-sep { font-size:13px;color:#94a3b8;font-weight:500;text-align:center; }
     </style>
-    <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js'></script>
     <style>
         .fc { font-family: 'Poppins', sans-serif; }
         .fc-toolbar-title { font-size: 16px !important; font-weight: 700; color: #0f172a; }
         .fc-button-primary { background-color: #3b82f6 !important; border-color: #3b82f6 !important; text-transform: capitalize; border-radius: 8px !important; }
         .fc-button-primary:hover { background-color: #1d4ed8 !important; border-color: #1d4ed8 !important; }
-        .fc-event { border-radius: 4px; border: none; font-size: 11px; padding: 2px 4px; }
-        .fc-daygrid-event { white-space: normal !important; align-items: start; }
+        .fc-event { border-radius: 4px; border: none; font-size: 10px; font-weight: 600; padding: 1px 3px; line-height: 1.25; }
+        .fc-daygrid-event { white-space: nowrap !important; overflow: hidden; text-overflow: ellipsis; align-items: center; }
+        .fc-daygrid-more-link { font-size: 10px !important; font-weight: 700; }
+        .fc .fc-highlight { opacity: 0.12; }
+        .fc-ev-period-span,.fc-ev-period { border-left: 3px solid rgba(109,40,217,0.85) !important; }
+        .fc-ev-proc-date { border-left: 3px solid #1e40af !important; }
+        .calendar-legend { display:flex; flex-wrap:wrap; gap:10px 18px; margin-bottom:14px; font-size:11px; font-weight:600; color:#475569; }
+        .calendar-legend span { display:inline-flex; align-items:center; gap:6px; }
+        .cal-lg-dot { width:10px; height:10px; border-radius:3px; flex-shrink:0; }
+        .cal-lg-bar { width:14px; height:6px; border-radius:2px; flex-shrink:0; }
+        /* Explicit height avoids 0-height month grid inside flex/card layouts */
+        #calendar { width:100%; min-height: 560px; background:#f8fafc; border-radius:12px; border:1px solid #e8edf5; }
+        #calendar .calendar-load-error { border-radius: 12px; }
+        .schedule-overview-card { overflow: visible !important; }
+        .schedule-overview-card > .card-header { position: relative; z-index: 2; }
     </style>
 </head>
 <body>
@@ -720,10 +964,14 @@ if ($bur < 25) {
                                 <p style="font-size:10px;color:#94a3b8;font-weight:500;">Selected record information</p>
                             </div>
                         </div>
+                        <?php if ($canManageSaro): ?>
                         <button class="btn btn-ghost btn-sm" onclick="openEditSaroModal()">
                             <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
                             Edit
                         </button>
+                        <?php else: ?>
+                        <span style="font-size:10px;color:#94a3b8;font-weight:600;">View only</span>
+                        <?php endif; ?>
                     </div>
                     <div style="padding:20px 24px;display:flex;flex-direction:column;gap:16px;">
                         <div>
@@ -801,10 +1049,14 @@ if ($bur < 25) {
                                 <p style="font-size:10px;color:#94a3b8;font-weight:500;">Linked to <?= htmlspecialchars($saro['saroNo']) ?></p>
                             </div>
                         </div>
+                        <?php if ($canManageSaro): ?>
                         <button class="btn btn-primary btn-sm" onclick="openAddObjModal()">
                             <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                             Add Object Code
                         </button>
+                        <?php else: ?>
+                        <span style="font-size:10px;color:#94a3b8;font-weight:600;">Owner can edit</span>
+                        <?php endif; ?>
                     </div>
                     <div style="overflow-x:auto;flex:1;">
                         <table class="mini-table">
@@ -829,6 +1081,7 @@ if ($bur < 25) {
                                         <td style="text-align:right;font-weight:700;color:#0f172a;">₱<?= number_format($obj['projected_cost'], 2) ?></td>
                                         <td style="text-align:right;">
                                             <div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;">
+                                                <?php if ($canManageSaro): ?>
                                                 <button class="action-btn action-btn-edit" title="Edit"
                                                         onclick="openEditObjModal(<?= $obj['objectId'] ?>,'<?= htmlspecialchars($obj['code'],ENT_QUOTES) ?>','<?= $obj['projected_cost'] ?>','<?= htmlspecialchars($obj['expense_items']??'',ENT_QUOTES) ?>')">
                                                     <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
@@ -836,6 +1089,9 @@ if ($bur < 25) {
                                                 <button class="action-btn action-btn-del" title="Remove" onclick="openDeleteObjModal(<?= $obj['objectId'] ?>,'<?= htmlspecialchars($obj['code'],ENT_QUOTES) ?>')">
                                                     <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                                                 </button>
+                                                <?php else: ?>
+                                                <span style="font-size:10px;color:#cbd5e1;font-style:italic;">View only</span>
+                                                <?php endif; ?>
                                             </div>
                                         </td>
                                     </tr>
@@ -849,7 +1105,7 @@ if ($bur < 25) {
             </div>
 
             <!-- Row 1.5: Calendar View -->
-            <div class="card" style="margin-bottom:20px;">
+            <div class="card schedule-overview-card" style="margin-bottom:20px;">
                 <div class="card-header">
                     <div style="display:flex;align-items:center;gap:10px;">
                         <div style="width:32px;height:32px;border-radius:8px;background:#f0fdf4;
@@ -858,12 +1114,19 @@ if ($bur < 25) {
                         </div>
                         <div>
                             <p style="font-size:13px;font-weight:800;color:#0f172a;">Schedule Overview</p>
-                            <p style="font-size:10px;color:#94a3b8;font-weight:500;">Procurement and SARO timelines</p>
+                            <p style="font-size:10px;color:#94a3b8;font-weight:500;">SARO validity, procurement periods, and activity dates</p>
                         </div>
                     </div>
                 </div>
                 <div style="padding:20px;">
-                    <div id="calendar"></div>
+                    <div class="calendar-legend">
+                        <span><i class="cal-lg-dot" style="background:#ef4444;"></i>SARO valid until</span>
+                        <span><i class="cal-lg-dot" style="background:#64748b;"></i>SARO released</span>
+                        <span><i class="cal-lg-bar" style="background:#e9d5ff;border:1px solid #c4b5fd;"></i>Procurement period (spans start–end)</span>
+                        <span><i class="cal-lg-dot" style="background:#7c3aed;"></i>Period end only / partial range</span>
+                        <span><i class="cal-lg-dot" style="background:#3b82f6;"></i>Procurement activity date</span>
+                    </div>
+                    <div id="calendar"><p style="margin:20px;color:#64748b;font-size:13px;">Loading calendar…</p></div>
                 </div>
             </div>
 
@@ -897,7 +1160,13 @@ if ($bur < 25) {
                             <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>
                             Filter
                         </button>
-                        <?php if (empty($objectCodes)): ?>
+                        <?php if (!$canManageSaro): ?>
+                        <button class="btn btn-ghost btn-sm" disabled title="Only the SARO owner can add activities"
+                                style="opacity:0.6;cursor:not-allowed;">
+                            <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                            Add Activity
+                        </button>
+                        <?php elseif (empty($objectCodes)): ?>
                         <button class="btn btn-ghost btn-sm" disabled title="Add at least one object code first"
                                 style="opacity:0.5;cursor:not-allowed;">
                             <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
@@ -981,19 +1250,25 @@ if ($bur < 25) {
                                     <td>
                                         <div style="display:flex;align-items:center;gap:6px;">
                                             <span style="color:#94a3b8;font-size:11px;"><?= htmlspecialchars($p['remarks'] ?: '—') ?></span>
+                                            <?php if ($canManageSaro): ?>
                                             <button class="action-btn action-btn-edit" title="Edit Remarks" style="width:22px;height:22px;border-radius:5px;flex-shrink:0;" onclick="openRemarksModal(<?= $p['procurementId'] ?>,'<?= htmlspecialchars(addslashes($p['remarks'] ?? '')) ?>')">
                                                 <svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
                                             </button>
+                                            <?php endif; ?>
                                         </div>
                                     </td>
                                     <td style="text-align:center;">
                                         <div style="display:flex;align-items:center;justify-content:center;gap:4px;">
+                                            <?php if ($canManageSaro): ?>
                                             <button class="action-btn action-btn-edit" title="Edit" onclick="openEditProcModal(<?= $p['procurementId'] ?>,'<?= htmlspecialchars($p['object_code_str'],ENT_QUOTES) ?>','<?= htmlspecialchars(addslashes($p['pro_act'] ?? ''),ENT_QUOTES) ?>','<?= $p['quantity'] ?>','<?= htmlspecialchars($p['unit'] ?? '',ENT_QUOTES) ?>','<?= $p['unit_cost'] ?>','<?= date('F', strtotime($p['period_start'] ?? 'now')) ?>','<?= date('Y', strtotime($p['period_start'] ?? 'now')) ?>','<?= date('F', strtotime($p['period_end'] ?? 'now')) ?>','<?= date('Y', strtotime($p['period_end'] ?? 'now')) ?>','<?= $p['proc_date'] ?>','<?= htmlspecialchars(addslashes($p['remarks'] ?? ''),ENT_QUOTES) ?>')">
                                                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
                                             </button>
                                             <button class="action-btn action-btn-del" title="Delete" onclick="openDeleteProcModal(<?= $p['procurementId'] ?>,'<?= htmlspecialchars(addslashes($p['pro_act'] ?? ''),ENT_QUOTES) ?>')">
                                                 <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                                             </button>
+                                            <?php else: ?>
+                                            <span style="font-size:10px;color:#cbd5e1;font-style:italic;">View only</span>
+                                            <?php endif; ?>
                                         </div>
                                     </td>
                                 </tr>
@@ -1156,6 +1431,12 @@ if ($bur < 25) {
             </div>
             <div>
                 <label class="form-label">Procurement Period <span style="color:#dc2626;">*</span></label>
+                <?php if (!empty($saro['valid_until'])): ?>
+                <p style="font-size:10px;color:#92400e;font-weight:600;margin:0 0 8px 0;line-height:1.45;background:#fef3c7;padding:8px 10px;border-radius:8px;border:1px solid #fde68a;">
+                    SARO is valid until <strong><?= htmlspecialchars(date('M j, Y', strtotime($saro['valid_until']))) ?></strong>.
+                    Period start/end and procurement date cannot extend beyond that date — adjust below or lengthen validity under SARO Details.
+                </p>
+                <?php endif; ?>
                 <div class="period-pair" style="margin-top:4px;">
                     <div style="display:flex;flex-direction:column;gap:6px;">
                         <span style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;">Period Start</span>
@@ -1282,6 +1563,12 @@ if ($bur < 25) {
             </div>
             <div>
                 <label class="form-label">Procurement Period <span style="color:#dc2626;">*</span></label>
+                <?php if (!empty($saro['valid_until'])): ?>
+                <p style="font-size:10px;color:#92400e;font-weight:600;margin:0 0 8px 0;line-height:1.45;background:#fef3c7;padding:8px 10px;border-radius:8px;border:1px solid #fde68a;">
+                    SARO is valid until <strong><?= htmlspecialchars(date('M j, Y', strtotime($saro['valid_until']))) ?></strong>.
+                    Period start/end and procurement date cannot extend beyond that date — adjust below or lengthen validity under SARO Details.
+                </p>
+                <?php endif; ?>
                 <div class="period-pair" style="margin-top:4px;">
                     <div style="display:flex;flex-direction:column;gap:6px;">
                         <span style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;">Period Start</span>
@@ -1561,11 +1848,58 @@ if ($bur < 25) {
     </div>
 </div>
 
+<script src="../assets/js/fullcalendar-6.1.11.index.global.min.js"></script>
 <script>
     const currentSaroId = <?= (int)$saroId ?>;
+    const canManageSaro = <?= $canManageSaro ? 'true' : 'false' ?>;
     const objCodesData  = <?= $objCodesJson ?>;
     const travelDocsCount = <?= count($travelDocs) ?>;
     const saroValidUntil = "<?= htmlspecialchars($saro['valid_until'] ?? '') ?>";
+    const calendarEventsData = <?= $calendarEventsJson ?>;
+
+    const MONTH_NAMES_CAL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+    function monthYearFirstIso(monthName, yearStr) {
+        const mi = MONTH_NAMES_CAL.indexOf(monthName);
+        const y = parseInt(yearStr, 10);
+        if (mi < 0 || !Number.isFinite(y)) return null;
+        const mm = String(mi + 1).padStart(2, '0');
+        return y + '-' + mm + '-01';
+    }
+
+    function monthYearLastIso(monthName, yearStr) {
+        const mi = MONTH_NAMES_CAL.indexOf(monthName);
+        const y = parseInt(yearStr, 10);
+        if (mi < 0 || !Number.isFinite(y)) return null;
+        const d = new Date(y, mi + 1, 0);
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return d.getFullYear() + '-' + mm + '-' + dd;
+    }
+
+    /** Plain-language reason or null if OK vs SARO valid-until and period order */
+    function procurementOutsideSaroValidity(procDateIso, startMonthName, startYearStr, endMonthName, endYearStr) {
+        const vu = (typeof saroValidUntil === 'string') ? saroValidUntil.trim() : '';
+        const sm = startMonthName || ''; const sy = String(startYearStr || '').trim();
+        const em = endMonthName || ''; const ey = String(endYearStr || '').trim();
+        const pFirst = monthYearFirstIso(sm, sy);
+        const pLast = monthYearLastIso(em, ey);
+        if (pFirst && pLast && pFirst > pLast) {
+            return 'Procurement period start must come before or line up with the period end (the start month cannot be after the end month/year range).';
+        }
+        if (!vu) return null;
+        if (pFirst && pFirst > vu) {
+            return 'Procurement period start exceeds SARO validity.\nYour period begins on ' + pFirst + ', after the SARO valid-until date (' + vu + ').';
+        }
+        if (pLast && pLast > vu) {
+            return 'Procurement period end exceeds SARO validity.\nYour period covers through ' + pLast + ', but the SARO is only valid until ' + vu + '.';
+        }
+        const pd = procDateIso ? procDateIso.trim() : '';
+        if (pd && pd > vu) {
+            return 'Procurement activity date (' + pd + ') cannot be after SARO valid-until (' + vu + ').';
+        }
+        return null;
+    }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
     function getVal(id) { const el = document.getElementById(id); return el ? el.value.trim() : ''; }
@@ -1593,6 +1927,10 @@ if ($bur < 25) {
     // ─── Notification dropdown ────────────────────────────────────────────────
     // ─── Add Activity Modal ───────────────────────────────────────────────────
     function openProcModal() {
+        if (!canManageSaro) {
+            openWarningModal('This SARO is in view-only mode for your account. Only the creator can add, edit, or delete data here.', 'View only');
+            return;
+        }
         setVal('proc-obj-code', ''); setVal('proc-activity', '');
         setVal('proc-qty', ''); setVal('proc-unit', ''); setVal('proc-unit-cost', '');
         setVal('proc-date', ''); setVal('proc-remarks', '');
@@ -1670,15 +2008,28 @@ if ($bur < 25) {
         
         if (!ok) return;
 
-        // Check if procurement date exceeds SARO valid until date
-        if (saroValidUntil) {
-            const pDate = new Date(getVal('proc-date'));
-            const vDate = new Date(saroValidUntil);
-            if (pDate > vDate) {
-                setFieldError('proc-date', 'err-proc-date', 'Date exceeds SARO validity');
-                openWarningModal('The selected Procurement Date cannot exceed the SARO valid until date.');
-                return;
+        const smAdd = document.getElementById('proc-start-month').value.trim();
+        const emAdd = document.getElementById('proc-end-month').value.trim();
+        const pvErr = procurementOutsideSaroValidity(getVal('proc-date'), smAdd, getVal('proc-start-year'), emAdd, getVal('proc-end-year'));
+        if (pvErr) {
+            const vuT = (saroValidUntil || '').trim();
+            const p0 = monthYearFirstIso(smAdd, getVal('proc-start-year'));
+            const p1 = monthYearLastIso(emAdd, getVal('proc-end-year'));
+            clearErrors(['proc-start-month','err-proc-start-month'],['proc-start-year','err-proc-start-year'],['proc-end-month','err-proc-end-month'],['proc-end-year','err-proc-end-year'],['proc-date','err-proc-date']);
+            if (p0 && p1 && p0 > p1) {
+                setFieldError('proc-end-month', 'err-proc-end-month', 'After period start');
+                setFieldError('proc-end-year', 'err-proc-end-year', 'Adjust year');
+            } else if (vuT && p0 && p0 > vuT) {
+                setFieldError('proc-start-month', 'err-proc-start-month', 'Begins after SARO expiry');
+                setFieldError('proc-start-year', 'err-proc-start-year', ' ');
+            } else if (vuT && p1 && p1 > vuT) {
+                setFieldError('proc-end-month', 'err-proc-end-month', 'Ends after SARO expiry');
+                setFieldError('proc-end-year', 'err-proc-end-year', ' ');
+            } else if (vuT && getVal('proc-date') > vuT) {
+                setFieldError('proc-date', 'err-proc-date', 'After SARO expiry');
             }
+            openWarningModal(pvErr + '\n\nShorten or move the procurement period and date, or extend “Valid Until” in SARO Details.', 'Cannot save — SARO validity limit');
+            return;
         }
 
         // Frontend Sanitization to prevent XSS
@@ -1699,12 +2050,18 @@ if ($bur < 25) {
             period_end_year: sanitize(getVal('proc-end-year')),
             proc_date: sanitize(getVal('proc-date')), remarks: sanitize(getVal('proc-remarks')),
             is_travelExpense: document.getElementById('proc-is-travel').value,
-        }).then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
-          .catch(() => alert('Network error.'));
+        }).then(d => {
+            if (d.success) location.reload();
+            else openWarningModal(d.error || 'Save failed.', 'Could not save activity');
+        }).catch(() => openWarningModal('Network error — try again.', 'Connection problem'));
     }
 
     // ─── Edit Activity Modal ──────────────────────────────────────────────────
     function openEditProcModal(procId, objCode, activity, qty, unit, unitCost, startMonth, startYear, endMonth, endYear, date, remarks) {
+        if (!canManageSaro) {
+            openWarningModal('This SARO is in view-only mode for your account. Only the creator can add, edit, or delete data here.', 'View only');
+            return;
+        }
         clearErrors(['ep-obj-code','err-ep-obj-code'],['ep-activity','err-ep-activity'],
                     ['ep-qty','err-ep-qty'],['ep-unit-cost','err-ep-unit-cost'],
                     ['ep-start-month','err-ep-start-month'],['ep-start-year','err-ep-start-year'],
@@ -1752,15 +2109,28 @@ if ($bur < 25) {
         
         if (!ok) return;
 
-        // Check if procurement date exceeds SARO valid until date
-        if (saroValidUntil) {
-            const epDate = new Date(getVal('ep-date'));
-            const evDate = new Date(saroValidUntil);
-            if (epDate > evDate) {
-                setFieldError('ep-date', 'err-ep-date', 'Date exceeds SARO validity');
-                openWarningModal('The selected Procurement Date cannot exceed the SARO valid until date.');
-                return;
+        const smEd = document.getElementById('ep-start-month').value.trim();
+        const emEd = document.getElementById('ep-end-month').value.trim();
+        const pvEd = procurementOutsideSaroValidity(getVal('ep-date'), smEd, getVal('ep-start-year'), emEd, getVal('ep-end-year'));
+        if (pvEd) {
+            const vuT = (saroValidUntil || '').trim();
+            const p0 = monthYearFirstIso(smEd, getVal('ep-start-year'));
+            const p1 = monthYearLastIso(emEd, getVal('ep-end-year'));
+            clearErrors(['ep-start-month','err-ep-start-month'],['ep-start-year','err-ep-start-year'],['ep-end-month','err-ep-end-month'],['ep-end-year','err-ep-end-year'],['ep-date','err-ep-date']);
+            if (p0 && p1 && p0 > p1) {
+                setFieldError('ep-end-month', 'err-ep-end-month', 'After period start');
+                setFieldError('ep-end-year', 'err-ep-end-year', 'Adjust year');
+            } else if (vuT && p0 && p0 > vuT) {
+                setFieldError('ep-start-month', 'err-ep-start-month', 'Begins after SARO expiry');
+                setFieldError('ep-start-year', 'err-ep-start-year', ' ');
+            } else if (vuT && p1 && p1 > vuT) {
+                setFieldError('ep-end-month', 'err-ep-end-month', 'Ends after SARO expiry');
+                setFieldError('ep-end-year', 'err-ep-end-year', ' ');
+            } else if (vuT && getVal('ep-date') > vuT) {
+                setFieldError('ep-date', 'err-ep-date', 'After SARO expiry');
             }
+            openWarningModal(pvEd + '\n\nShorten or move the procurement period and date, or extend “Valid Until” in SARO Details.', 'Cannot save — SARO validity limit');
+            return;
         }
 
         // Frontend Sanitization to prevent XSS
@@ -1779,12 +2149,18 @@ if ($bur < 25) {
             period_end_month: sanitize(document.getElementById('ep-end-month').value),
             period_end_year: sanitize(getVal('ep-end-year')),
             proc_date: sanitize(getVal('ep-date')), remarks: sanitize(getVal('ep-remarks')),
-        }).then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
-          .catch(() => alert('Network error.'));
+        }).then(d => {
+            if (d.success) location.reload();
+            else openWarningModal(d.error || 'Save failed.', 'Could not update activity');
+        }).catch(() => openWarningModal('Network error — try again.', 'Connection problem'));
     }
 
     // ─── Edit SARO Modal ──────────────────────────────────────────────────────
     function openEditSaroModal() { 
+        if (!canManageSaro) {
+            openWarningModal('Only the SARO creator can edit SARO details.', 'View only');
+            return;
+        }
         clearErrors(
             ['edit-saro-title', 'err-edit-saro-title'],
             ['edit-fiscal-year', 'err-edit-fiscal-year'],
@@ -1829,12 +2205,20 @@ if ($bur < 25) {
             saro_title: sanitize(getVal('edit-saro-title')), fiscal_year: sanitize(getVal('edit-fiscal-year')),
             date_released: sanitize(getVal('edit-date-released')), valid_until: sanitize(getVal('edit-valid-until')),
             total_budget: sanitize(getVal('edit-total-budget')),
-        }).then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
-          .catch(() => alert('Network error.'));
+        }).then(d => {
+            if (d.success) location.reload();
+            else openWarningModal(d.error || 'Save failed.', 'Could not update SARO');
+        }).catch(() => openWarningModal('Network error — try again.', 'Connection problem'));
     }
 
     // ─── Add Object Code Modal ────────────────────────────────────────────────
-    function openAddObjModal() { document.getElementById('addObjModal').classList.add('open'); }
+    function openAddObjModal() {
+        if (!canManageSaro) {
+            openWarningModal('Only the SARO creator can add object codes.', 'View only');
+            return;
+        }
+        document.getElementById('addObjModal').classList.add('open');
+    }
     function closeAddObjModal() {
         document.getElementById('addObjModal').classList.remove('open');
         document.getElementById('objCodeListView').innerHTML = '';
@@ -1930,7 +2314,7 @@ if ($bur < 25) {
             }
         });
         
-        if (rows.length === 0) { alert('Add at least one object code row.'); return; }
+        if (rows.length === 0) { openWarningModal('Add at least one object code row.', 'Nothing to save'); return; }
         if (!ok) return;
 
         // Frontend Sanitization to prevent XSS
@@ -1945,12 +2329,19 @@ if ($bur < 25) {
         });
 
         postAjax({ ajax_action: 'add_object_codes', saroId: currentSaroId, items: JSON.stringify(items) })
-            .then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
-            .catch(() => alert('Network error.'));
+            .then(d => {
+                if (d.success) location.reload();
+                else openWarningModal(d.error || 'Save failed.', 'Could not add object codes');
+            })
+            .catch(() => openWarningModal('Network error — try again.', 'Connection problem'));
     }
 
     // ─── Edit Object Code Modal ───────────────────────────────────────────────
     function openEditObjModal(objectId, code, cost, item) {
+        if (!canManageSaro) {
+            openWarningModal('Only the SARO creator can edit object codes.', 'View only');
+            return;
+        }
         clearErrors(['edit-obj-code','err-edit-obj-code'], ['edit-obj-cost','err-edit-obj-cost']);
         setVal('edit-obj-id', objectId);
         setVal('edit-obj-code', code);
@@ -1985,12 +2376,18 @@ if ($bur < 25) {
             ajax_action: 'edit_object_code', saroId: currentSaroId, objectId,
             code: sanitize(getVal('edit-obj-code')), projected_cost: getVal('edit-obj-cost'),
             expense_item: sanitize(getVal('edit-obj-expense-item')),
-        }).then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
-          .catch(() => alert('Network error.'));
+        }).then(d => {
+            if (d.success) location.reload();
+            else openWarningModal(d.error || 'Save failed.', 'Could not update object code');
+        }).catch(() => openWarningModal('Network error — try again.', 'Connection problem'));
     }
 
     // ─── Delete Object Code Modal ─────────────────────────────────────────────
     function openDeleteObjModal(objectId, code) {
+        if (!canManageSaro) {
+            openWarningModal('Only the SARO creator can delete object codes.', 'View only');
+            return;
+        }
         setVal('delete-obj-id', objectId);
         document.getElementById('delete-obj-label').textContent = code;
         document.getElementById('deleteObjModal').classList.add('open');
@@ -2003,13 +2400,20 @@ if ($bur < 25) {
     function confirmDeleteObj() {
         const objectId = getVal('delete-obj-id'); if (!objectId) return;
         postAjax({ ajax_action: 'delete_object_code', saroId: currentSaroId, objectId })
-            .then(d => { if (d.success) location.reload(); else alert(d.error || 'Delete failed.'); })
-            .catch(() => alert('Network error.'));
+            .then(d => {
+                if (d.success) location.reload();
+                else openWarningModal(d.error || 'Delete failed.', 'Could not delete object code');
+            })
+            .catch(() => openWarningModal('Network error — try again.', 'Connection problem'));
     }
 
     // ─── Edit Remarks Modal ───────────────────────────────────────────────────
     let _remarksProcId = null;
     function openRemarksModal(procId, text) {
+        if (!canManageSaro) {
+            openWarningModal('Only the SARO creator can edit remarks.', 'View only');
+            return;
+        }
         _remarksProcId = procId;
         document.getElementById('remarks-textarea').value = text;
         document.getElementById('remarksModal').classList.add('open');
@@ -2021,12 +2425,19 @@ if ($bur < 25) {
     document.getElementById('saveRemarksBtn').addEventListener('click', function() {
         if (!_remarksProcId) return;
         postAjax({ ajax_action: 'edit_remarks', saroId: currentSaroId, procurementId: _remarksProcId, remarks: document.getElementById('remarks-textarea').value })
-            .then(d => { if (d.success) location.reload(); else alert(d.error || 'Save failed.'); })
-            .catch(() => alert('Network error.'));
+            .then(d => {
+                if (d.success) location.reload();
+                else openWarningModal(d.error || 'Save failed.', 'Could not update remarks');
+            })
+            .catch(() => openWarningModal('Network error — try again.', 'Connection problem'));
     });
 
     // ─── Delete Procurement Modal ─────────────────────────────────────────────
     function openDeleteProcModal(procId, name) {
+        if (!canManageSaro) {
+            openWarningModal('Only the SARO creator can delete procurement activities.', 'View only');
+            return;
+        }
         setVal('delete-proc-id', procId);
         document.getElementById('delete-proc-label').textContent = name;
         document.getElementById('deleteProcModal').classList.add('open');
@@ -2039,42 +2450,65 @@ if ($bur < 25) {
     function confirmDeleteProc() {
         const procId = getVal('delete-proc-id'); if (!procId) return;
         postAjax({ ajax_action: 'delete_procurement', saroId: currentSaroId, procurementId: procId })
-            .then(d => { if (d.success) location.reload(); else alert(d.error || 'Delete failed.'); })
-            .catch(() => alert('Network error.'));
+            .then(d => {
+                if (d.success) location.reload();
+                else openWarningModal(d.error || 'Delete failed.', 'Could not delete activity');
+            })
+            .catch(() => openWarningModal('Network error — try again.', 'Connection problem'));
     }
 
-    // Date Warning Modal
-    function openWarningModal(msg) {
-        document.getElementById('warning-msg').textContent = msg;
+    // Date / validity warning modal (shared)
+    function openWarningModal(msg, title) {
+        var th = document.getElementById('warning-modal-title');
+        if (th) th.textContent = title || 'Validation Error';
+        document.getElementById('warning-msg').textContent = msg || '';
         document.getElementById('warningModal').classList.add('open');
     }
     function closeWarningModal() {
         document.getElementById('warningModal').classList.remove('open');
     }
-    document.getElementById('warningModal').addEventListener('click', function(e) {
-        if (e.target === this) closeWarningModal();
-    });
+    function scheduleCalendarAndOverlaysInit() {
+        const warningModalEl = document.getElementById('warningModal');
+        if (warningModalEl) {
+            warningModalEl.addEventListener('click', function(e) {
+                if (e.target === this) closeWarningModal();
+            });
+        }
 
-    // Initialize Calendar
-    document.addEventListener('DOMContentLoaded', function() {
         const calendarEl = document.getElementById('calendar');
         if (!calendarEl) return;
-        const calendar = new FullCalendar.Calendar(calendarEl, {
-            initialView: 'dayGridMonth',
-            headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,dayGridWeek' },
-            events: [
-                <?php if (!empty($saro['valid_until'])): ?>
-                { title: 'SARO Expires', start: '<?= date('Y-m-d', strtotime($saro['valid_until'])) ?>', color: '#ef4444', allDay: true },
-                <?php endif; ?>
-                <?php foreach ($procurements as $p): ?>
-                <?php if (!empty($p['proc_date'])): ?>
-                { title: <?= json_encode($p['activity']) ?>, start: '<?= date('Y-m-d', strtotime($p['proc_date'])) ?>', color: '#3b82f6', allDay: true },
-                <?php endif; ?>
-                <?php endforeach; ?>
-            ]
-        });
-        calendar.render();
-    });
+        if (typeof FullCalendar === 'undefined') {
+            calendarEl.innerHTML = '<p class="calendar-load-error" style="padding:24px 20px;line-height:1.6;color:#b45309;font-size:13px;">The schedule calendar script did not load. Enable JavaScript, hard-refresh this page, and confirm <code style="background:#fef3c7;padding:2px 6px;border-radius:4px;">assets/js/fullcalendar-6.1.11.index.global.min.js</code> exists on the server.</p>';
+            return;
+        }
+        calendarEl.innerHTML = '';
+        try {
+            const calendar = new FullCalendar.Calendar(calendarEl, {
+                initialView: 'dayGridMonth',
+                initialDate: <?= json_encode(date('Y-m-d'), $jsonEmbedFlags) ?>,
+                height: 620,
+                fixedWeekCount: false,
+                eventOverlap: false,
+                dayMaxEvents: 4,
+                moreLinkClick: 'popover',
+                headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,dayGridWeek' },
+                views: {
+                    dayGridWeek: { dayMaxEvents: 8 },
+                },
+                events: Array.isArray(calendarEventsData) ? calendarEventsData : []
+            });
+            calendar.render();
+        } catch (err) {
+            calendarEl.innerHTML = '<p class="calendar-load-error" style="padding:24px 20px;line-height:1.6;color:#b45309;font-size:13px;">Could not start the calendar. If this persists, open the browser console (F12) for details.</p>';
+            console.error(err);
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', scheduleCalendarAndOverlaysInit);
+    } else {
+        scheduleCalendarAndOverlaysInit();
+    }
 </script>
 
 <!-- Generic Warning Modal for Validation -->
@@ -2085,8 +2519,8 @@ if ($bur < 25) {
                         display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">
                 <svg width="24" height="24" fill="none" stroke="#ef4444" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
             </div>
-            <h3 style="font-size:18px;font-weight:800;color:#0f172a;margin-bottom:10px;">Validation Error</h3>
-            <p id="warning-msg" style="font-size:13px;color:#475569;line-height:1.6;margin-bottom:24px;"></p>
+            <h3 id="warning-modal-title" style="font-size:18px;font-weight:800;color:#0f172a;margin-bottom:10px;">Validation Error</h3>
+            <p id="warning-msg" style="font-size:13px;color:#475569;line-height:1.65;margin-bottom:24px;white-space:pre-line;text-align:left;"></p>
             <button class="btn-submit" onclick="closeWarningModal()">Understood</button>
         </div>
     </div>
