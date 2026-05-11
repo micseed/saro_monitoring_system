@@ -1402,6 +1402,8 @@ if ($bur < 25) {
                         <option value="">— None —</option>
                         <option>Unit</option><option>Lot</option><option>Set</option>
                         <option>Month</option><option>Year</option><option>Piece</option>
+                        <option>Pack</option><option>Trip</option><option>Batch</option>
+                        <option>Session</option>
                     </select>
                 </div>
                 <div>
@@ -1553,6 +1555,7 @@ if ($bur < 25) {
                         <option value="">— None —</option>
                         <option>Unit</option><option>Lot</option><option>Set</option>
                         <option>Month</option><option>Year</option><option>Piece</option>
+                        
                     </select>
                 </div>
                 <div>
