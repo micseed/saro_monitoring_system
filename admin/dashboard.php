@@ -247,7 +247,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                         <h2 style="font-size:22px;font-weight:900;color:#fff;text-transform:uppercase;letter-spacing:-0.01em;margin-bottom:6px;">System Overview</h2>
                         <p style="font-size:13px;color:rgba(255,255,255,0.65);font-weight:400;max-width:500px;line-height:1.6;">
                             Manage accounts, monitor SARO fund utilization, and process password requests for the
-                            <strong style="color:rgba(255,255,255,0.9);font-weight:600;">Zamboanga-BASULTA</strong> cluster.
+                            <strong style="color:rgba(255,255,255,0.9);font-weight:600;">DRRM - DICT.</strong>
                         </p>
                     </div>
                     <div style="display:flex;gap:12px;flex-shrink:0;">

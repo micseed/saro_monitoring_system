@@ -495,7 +495,7 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                         Welcome back, <span style="color:#93c5fd;"><?= htmlspecialchars($username) ?>!</span>
                     </h2>
                     <p style="font-size:13px;color:rgba(255,255,255,0.6);font-weight:400;max-width:520px;line-height:1.6;">
-                        Real-time SARO tracking is active for the <strong style="color:rgba(255,255,255,0.85);font-weight:600;">Zamboanga-BASULTA</strong> cluster.
+                        Real-time SARO tracking is active for the <strong style="color:rgba(255,255,255,0.85);font-weight:600;">DRRM - DICT</strong>
                         System status is <span style="color:#86efac;font-weight:700;">Operational</span>.
                     </p>
                 </div>

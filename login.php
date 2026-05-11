@@ -406,7 +406,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             <p style="font-size:14px; color:rgba(255,255,255,0.6); line-height:1.8;
                       font-weight:400; margin-bottom:32px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:28px;">
-                Centralized fund monitoring for Special Allotment Release Orders across the Zamboanga Peninsula and BASULTA cluster.
+                Centralized fund monitoring for Special Allotment Release Orders in DRRM - DICT.
             </p>
         </div>
     </div>
