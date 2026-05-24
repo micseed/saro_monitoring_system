@@ -89,6 +89,22 @@ if (!empty($_POST['ajax_action'])) {
         $st->execute([$saro, $uid]);
         return (bool)$st->fetchColumn();
     };
+    $canEditSaro = static function (PDO $conn, int $saro, int $uid) use ($isSaroOwner): bool {
+        if ($isSaroOwner($conn, $saro, $uid)) return true;
+        $st = $conn->prepare('SELECT can_edit FROM saro_permissions WHERE saro_id = ? AND granted_to = ?');
+        $st->execute([$saro, $uid]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        return $row && (int)$row['can_edit'] === 1;
+    };
+    if ($saroId) {
+        $stChk = $conn->prepare('SELECT status FROM saro WHERE saroId = ?');
+        $stChk->execute([$saroId]);
+        $saroStatusChk = $stChk->fetchColumn();
+        if ($saroStatusChk && $saroStatusChk !== 'active') {
+            echo json_encode(['success' => false, 'error' => 'This SARO is ' . ucfirst($saroStatusChk) . ' and cannot be modified.']);
+            exit;
+        }
+    }
     switch ($_POST['ajax_action']) {
 
         case 'add_procurement': {
@@ -96,7 +112,7 @@ if (!empty($_POST['ajax_action'])) {
                 echo json_encode(['success' => false, 'error' => 'Missing SARO.']);
                 break;
             }
-            if (!$isSaroOwner($conn, $saroId, $userId)) {
+            if (!$canEditSaro($conn, $saroId, $userId)) {
                 echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can add procurement activities.']);
                 break;
             }
@@ -148,7 +164,7 @@ if (!empty($_POST['ajax_action'])) {
 
         case 'edit_procurement': {
             $procId = (int)($_POST['procurementId'] ?? 0);
-            if (!$isSaroOwner($conn, $saroId, $userId)) {
+            if (!$canEditSaro($conn, $saroId, $userId)) {
                 echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can update procurement activities.']);
                 break;
             }
@@ -186,7 +202,7 @@ if (!empty($_POST['ajax_action'])) {
 
         case 'edit_remarks': {
             $procId  = (int)($_POST['procurementId'] ?? 0);
-            if (!$isSaroOwner($conn, $saroId, $userId)) {
+            if (!$canEditSaro($conn, $saroId, $userId)) {
                 echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can edit remarks.']);
                 break;
             }
@@ -203,7 +219,7 @@ if (!empty($_POST['ajax_action'])) {
 
         case 'delete_procurement': {
             $delProcId = (int)($_POST['procurementId'] ?? 0);
-            if (!$isSaroOwner($conn, $saroId, $userId)) {
+            if (!$canEditSaro($conn, $saroId, $userId)) {
                 echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can delete procurement activities.']);
                 break;
             }
@@ -230,7 +246,7 @@ if (!empty($_POST['ajax_action'])) {
         }
 
         case 'edit_saro': {
-            if (!$isSaroOwner($conn, $saroId, $userId)) {
+            if (!$canEditSaro($conn, $saroId, $userId)) {
                 echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can update this SARO.']);
                 break;
             }
@@ -246,7 +262,7 @@ if (!empty($_POST['ajax_action'])) {
         case 'add_object_codes': {
             $items = json_decode($_POST['items'] ?? '[]', true);
             if (!$saroId || empty($items)) { echo json_encode(['success'=>false,'error'=>'No data']); break; }
-            if (!$isSaroOwner($conn, $saroId, $userId)) {
+            if (!$canEditSaro($conn, $saroId, $userId)) {
                 echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can add object codes.']);
                 break;
             }
@@ -282,7 +298,7 @@ if (!empty($_POST['ajax_action'])) {
 
         case 'edit_object_code': {
             $oid     = (int)($_POST['objectId']??0);
-            if (!$isSaroOwner($conn, $saroId, $userId)) {
+            if (!$canEditSaro($conn, $saroId, $userId)) {
                 echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can update object codes.']);
                 break;
             }
@@ -307,7 +323,7 @@ if (!empty($_POST['ajax_action'])) {
 
         case 'delete_object_code': {
             $delOid = (int)($_POST['objectId']??0);
-            if (!$isSaroOwner($conn, $saroId, $userId)) {
+            if (!$canEditSaro($conn, $saroId, $userId)) {
                 echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can delete object codes.']);
                 break;
             }
@@ -365,7 +381,11 @@ if (!$saro) {
     die("SARO record not found.");
 }
 $currentUserId = (int)($_SESSION['user_id'] ?? 0);
-$canManageSaro = ((int)($saro['userId'] ?? 0) === $currentUserId);
+$_p = $conn->prepare('SELECT can_edit FROM saro_permissions WHERE saro_id = ? AND granted_to = ?');
+$_p->execute([$saroId, $currentUserId]);
+$_pr = $_p->fetch(PDO::FETCH_ASSOC);
+$canManageSaro = $saro['status'] === 'active' &&
+    ((int)($saro['userId'] ?? 0) === $currentUserId || $_pr && (int)$_pr['can_edit'] === 1);
 
 // 2. Fetch Object Codes and related expense items
 $stmtObj = $conn->prepare("

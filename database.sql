@@ -292,3 +292,33 @@ CREATE TABLE password_resets (
     created_at DATETIME     DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (userId) REFERENCES user(userId) ON DELETE CASCADE
 );
+
+-- ============================================================
+--  15. saro_permissions
+--      Stores delegated access granted by a SARO owner to
+--      another admin.  can_edit / can_cancel / can_delete let
+--      the owner choose exactly which actions to allow.
+--      ON DELETE CASCADE on saro_id ensures grants are cleaned
+--      up automatically when the SARO is hard-deleted.
+--      ON DELETE CASCADE on granted_to removes grants when the
+--      recipient account is deleted.
+--      granted_by is nullable so deleting the owner's account
+--      does not remove the grant rows.
+-- ============================================================
+CREATE TABLE saro_permissions (
+    id          INT      PRIMARY KEY AUTO_INCREMENT,
+    saro_id     INT      NOT NULL,
+    granted_by  INT,
+    granted_to  INT      NOT NULL,
+    can_edit    TINYINT(1) NOT NULL DEFAULT 0,
+    can_cancel  TINYINT(1) NOT NULL DEFAULT 0,
+    can_delete  TINYINT(1) NOT NULL DEFAULT 0,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    UNIQUE KEY uq_saro_user (saro_id, granted_to),
+
+    FOREIGN KEY (saro_id)    REFERENCES saro(saroId)   ON DELETE CASCADE,
+    FOREIGN KEY (granted_by) REFERENCES user(userId)   ON DELETE SET NULL,
+    FOREIGN KEY (granted_to) REFERENCES user(userId)   ON DELETE CASCADE
+);

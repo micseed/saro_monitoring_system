@@ -18,17 +18,33 @@ $conn = $db->connect();
 if (!empty($_POST['ajax_action'])) {
     header('Content-Type: application/json');
     $action = $_POST['ajax_action'];
-    $ownsProcurement = static function (PDO $conn, int $procId, int $uid): bool {
+    $canManageProcurement = static function (PDO $conn, int $procId, int $uid): bool {
         if ($procId <= 0 || $uid <= 0) return false;
         $st = $conn->prepare("
-            SELECT 1
+            SELECT oc.saroId, s.userId
             FROM procurement p
             INNER JOIN object_code oc ON p.objectId = oc.objectId
             INNER JOIN saro s ON oc.saroId = s.saroId
-            WHERE p.procurementId = ? AND s.userId = ?
+            WHERE p.procurementId = ?
         ");
-        $st->execute([$procId, $uid]);
-        return (bool)$st->fetchColumn();
+        $st->execute([$procId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row) return false;
+        if ((int)$row['userId'] === $uid) return true;
+        $st2 = $conn->prepare('SELECT can_edit FROM saro_permissions WHERE saro_id = ? AND granted_to = ?');
+        $st2->execute([(int)$row['saroId'], $uid]);
+        $perm = $st2->fetch(PDO::FETCH_ASSOC);
+        return $perm && (int)$perm['can_edit'] === 1;
+    };
+    $saroActiveForProc = static function (PDO $conn, int $procId): bool {
+        $st = $conn->prepare("
+            SELECT s.status FROM procurement p
+            INNER JOIN object_code oc ON p.objectId = oc.objectId
+            INNER JOIN saro s ON oc.saroId = s.saroId
+            WHERE p.procurementId = ?
+        ");
+        $st->execute([$procId]);
+        return $st->fetchColumn() === 'active';
     };
 
     if ($action === 'toggle_signature') {
@@ -40,8 +56,12 @@ if (!empty($_POST['ajax_action'])) {
             echo json_encode(['success' => false, 'error' => 'Missing params']);
             exit;
         }
-        if (!$ownsProcurement($conn, $procId, $userId)) {
-            echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can update signatures.']);
+        if (!$saroActiveForProc($conn, $procId)) {
+            echo json_encode(['success' => false, 'error' => 'This SARO is not active and cannot be modified.']);
+            exit;
+        }
+        if (!$canManageProcurement($conn, $procId, $userId)) {
+            echo json_encode(['success' => false, 'error' => 'View-only mode: you do not have permission to update signatures.']);
             exit;
         }
 
@@ -76,8 +96,12 @@ if (!empty($_POST['ajax_action'])) {
             echo json_encode(['success' => false, 'error' => 'Missing params']);
             exit;
         }
-        if (!$ownsProcurement($conn, $procId, $userId)) {
-            echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can update required documents.']);
+        if (!$saroActiveForProc($conn, $procId)) {
+            echo json_encode(['success' => false, 'error' => 'This SARO is not active and cannot be modified.']);
+            exit;
+        }
+        if (!$canManageProcurement($conn, $procId, $userId)) {
+            echo json_encode(['success' => false, 'error' => 'View-only mode: you do not have permission to update required documents.']);
             exit;
         }
 
@@ -106,8 +130,12 @@ if (!empty($_POST['ajax_action'])) {
     if ($action === 'cancel_procurement') {
         $procId = (int)($_POST['procurementId'] ?? 0);
         if (!$procId) { echo json_encode(['success' => false, 'error' => 'Missing procurementId']); exit; }
-        if (!$ownsProcurement($conn, $procId, $userId)) {
-            echo json_encode(['success' => false, 'error' => 'View-only mode: only the SARO owner can cancel procurement activities.']);
+        if (!$saroActiveForProc($conn, $procId)) {
+            echo json_encode(['success' => false, 'error' => 'This SARO is not active and cannot be modified.']);
+            exit;
+        }
+        if (!$canManageProcurement($conn, $procId, $userId)) {
+            echo json_encode(['success' => false, 'error' => 'View-only mode: you do not have permission to cancel procurement activities.']);
             exit;
         }
 
@@ -142,7 +170,11 @@ $saro = $stmtSaro->fetch(PDO::FETCH_ASSOC);
 if (!$saro) {
     die("SARO Not Found");
 }
-$canManageSaro = ((int)($saro['userId'] ?? 0) === $userId);
+$_pp = $conn->prepare('SELECT can_edit FROM saro_permissions WHERE saro_id = ? AND granted_to = ?');
+$_pp->execute([$saroId, $userId]);
+$_ppr = $_pp->fetch(PDO::FETCH_ASSOC);
+$canManageSaro = $saro['status'] === 'active' &&
+    ((int)($saro['userId'] ?? 0) === $userId || $_ppr && (int)$_ppr['can_edit'] === 1);
 
 $stmtProc = $conn->prepare("
     SELECT p.*, oc.code AS object_code_str
@@ -274,11 +306,11 @@ foreach ($procurements as $p) {
         .panel-header { padding: 16px 24px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
 
         table { width: 100%; border-collapse: collapse; }
-        thead tr.th-primary th { padding: 11px 14px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #fff; background: #0f172a; border-right: 1px solid rgba(255,255,255,0.08); white-space: nowrap; text-align: center; }
+        thead tr.th-primary th { padding: 11px 14px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #fff; background: #0f172a; border-right: 1px solid rgba(255,255,255,0.08); white-space: nowrap; text-align: center; position: sticky; top: 0; z-index: 3; }
         thead tr.th-primary th:first-child { text-align: left; }
         thead tr.th-primary th.group-pr { background: #1e3a8a; }
         thead tr.th-primary th.group-po { background: #1e40af; }
-        thead tr.th-secondary th { padding: 8px 12px; font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #cbd5e1; background: #1e293b; border-right: 1px solid rgba(255,255,255,0.06); border-bottom: 1px solid rgba(255,255,255,0.08); white-space: nowrap; text-align: center; }
+        thead tr.th-secondary th { padding: 8px 12px; font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #cbd5e1; background: #1e293b; border-right: 1px solid rgba(255,255,255,0.06); border-bottom: 1px solid rgba(255,255,255,0.08); white-space: nowrap; text-align: center; position: sticky; top: 37px; z-index: 3; }
         thead tr.th-secondary th.sub-pr { background: #1e3a8a; color: #bfdbfe; }
         thead tr.th-secondary th.sub-po { background: #1e40af; color: #bfdbfe; }
 
@@ -448,7 +480,7 @@ foreach ($procurements as $p) {
                     </div>
                 </div>
 
-                <div style="overflow-x:auto;">
+                <div style="overflow-x:auto; overflow-y:auto; max-height:calc(100vh - 300px);">
                     <table>
                         <thead>
                             <tr class="th-primary">

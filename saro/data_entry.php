@@ -51,7 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => false, 'error' => 'All required fields must be filled.']);
             exit;
         }
-        if (!$saroObj->isOwner($id, $userId)) {
+        if (!$saroObj->isOwner($id, $userId) && !$saroObj->hasPermission($id, $userId, 'can_edit')) {
             echo json_encode(['success' => false, 'error' => 'You do not have permission to edit this SARO.']);
             exit;
         }
@@ -63,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $id     = (int)($_POST['saro_id'] ?? 0);
         $saroNo = trim($_POST['saro_no'] ?? '');
         if (!$id) { echo json_encode(['success' => false, 'error' => 'Invalid ID.']); exit; }
-        if (!$saroObj->isOwner($id, $userId)) {
+        if (!$saroObj->isOwner($id, $userId) && !$saroObj->hasPermission($id, $userId, 'can_delete')) {
             echo json_encode(['success' => false, 'error' => 'You do not have permission to delete this SARO.']);
             exit;
         }
@@ -80,7 +80,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $id     = (int)($_POST['saro_id'] ?? 0);
         $saroNo = trim($_POST['saro_no'] ?? '');
         if (!$id) { echo json_encode(['success' => false, 'error' => 'Invalid ID.']); exit; }
-        if (!$saroObj->isOwner($id, $userId)) {
+        if (!$saroObj->isOwner($id, $userId) && !$saroObj->hasPermission($id, $userId, 'can_cancel')) {
             echo json_encode(['success' => false, 'error' => 'You do not have permission to cancel this SARO.']);
             exit;
         }
@@ -93,6 +93,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    if ($action === 'get_permissions') {
+        $saroId = (int)($_POST['saro_id'] ?? 0);
+        if (!$saroId || !$saroObj->isOwner($saroId, $userId)) {
+            echo json_encode(['success' => false, 'error' => 'Access denied.']);
+            exit;
+        }
+        echo json_encode([
+            'success' => true,
+            'grants'  => $saroObj->getPermissionsForSaro($saroId),
+            'others'  => $saroObj->getOtherAdmins($saroId, $userId),
+        ]);
+        exit;
+    }
+
+    if ($action === 'grant_permission') {
+        $saroId    = (int)($_POST['saro_id']    ?? 0);
+        $grantedTo = (int)($_POST['granted_to'] ?? 0);
+        $canEdit   = (int)($_POST['can_edit']   ?? 0);
+        $canCancel = (int)($_POST['can_cancel'] ?? 0);
+        $canDelete = (int)($_POST['can_delete'] ?? 0);
+        if (!$saroId || !$grantedTo) {
+            echo json_encode(['success' => false, 'error' => 'Invalid parameters.']);
+            exit;
+        }
+        if (!$saroObj->isOwner($saroId, $userId)) {
+            echo json_encode(['success' => false, 'error' => 'Only the SARO owner can grant permissions.']);
+            exit;
+        }
+        echo json_encode($saroObj->savePermission($saroId, $userId, $grantedTo, $canEdit, $canCancel, $canDelete));
+        exit;
+    }
+
+    if ($action === 'revoke_permission') {
+        $saroId    = (int)($_POST['saro_id']    ?? 0);
+        $grantedTo = (int)($_POST['granted_to'] ?? 0);
+        if (!$saroId || !$grantedTo) {
+            echo json_encode(['success' => false, 'error' => 'Invalid parameters.']);
+            exit;
+        }
+        if (!$saroObj->isOwner($saroId, $userId)) {
+            echo json_encode(['success' => false, 'error' => 'Only the SARO owner can revoke permissions.']);
+            exit;
+        }
+        echo json_encode($saroObj->revokePermission($saroId, $grantedTo));
+        exit;
+    }
+
     echo json_encode(['success' => false, 'error' => 'Unknown action.']);
     exit;
 }
@@ -100,6 +147,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 $allSaros        = $saroObj->getAllSaros();
 // Only show 'active' SAROs in data entry (excluded: cancelled, obligated, lapsed, deleted)
 $activeSaros     = array_values(array_filter($allSaros, fn($s) => $s['status'] === 'active'));
+$myPermissions   = $saroObj->getMyPermissions($userId);
 $cancelledCount  = count(array_filter($allSaros, fn($s) => $s['status'] === 'cancelled'));
 $obligatedCount  = count(array_filter($allSaros, fn($s) => $s['status'] === 'obligated'));
 $lapsedCount     = count(array_filter($allSaros, fn($s) => $s['status'] === 'lapsed'));
@@ -341,6 +389,8 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
         .action-btn-del:hover { background: #fee2e2; border-color: #fecaca; color: #dc2626; }
         .action-btn-cancel { color: #94a3b8; }
         .action-btn-cancel:hover { background: #fef9c3; border-color: #fde68a; color: #b45309; }
+        .action-btn-manage { color: #7c3aed; }
+        .action-btn-manage:hover { background: #ede9fe; border-color: #ddd6fe; }
 
         .panel-footer {
             padding: 14px 24px; border-top: 1px solid #f1f5f9; background: #fafbfe;
@@ -562,6 +612,10 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                                 $codeCount   = (int)$s['obj_count'];
                                 $validUntilFmt = $s['valid_until'] ? date('M d, Y', strtotime($s['valid_until'])) : '—';
                                 $isOwner     = ((int)$s['userId'] === $userId);
+                                $perm        = $myPermissions[$s['saroId']] ?? null;
+                                $canEdit     = $isOwner || $perm && (int)$perm['can_edit']   === 1;
+                                $canCancel   = $isOwner || $perm && (int)$perm['can_cancel'] === 1;
+                                $canDelete   = $isOwner || $perm && (int)$perm['can_delete'] === 1;
                             ?>
                             <tr>
                                 <td style="color:#cbd5e1;font-weight:700;font-size:12px;"><?= $rowNum ?></td>
@@ -569,6 +623,8 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                                     <span style="font-weight:800;color:#0f172a;font-size:13px;letter-spacing:-0.01em;"><?= $saroNoEsc ?></span>
                                     <?php if ($isOwner): ?>
                                     <span style="font-size:9px;background:#eff6ff;color:#2563eb;border-radius:4px;padding:1px 5px;font-weight:700;margin-left:4px;">MINE</span>
+                                    <?php elseif ($canEdit || $canCancel || $canDelete): ?>
+                                    <span style="font-size:9px;background:#f5f3ff;color:#7c3aed;border-radius:4px;padding:1px 5px;font-weight:700;margin-left:4px;">DELEGATED</span>
                                     <?php endif; ?>
                                 </td>
                                 <td style="max-width:280px;">
@@ -593,7 +649,7 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                                         <a href="view_saro.php?id=<?= $s['saroId'] ?>" class="action-btn action-btn-view" title="View">
                                             <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
                                         </a>
-                                        <?php if ($isOwner): ?>
+                                        <?php if ($canEdit): ?>
                                         <button class="action-btn action-btn-edit" title="Edit"
                                             data-id="<?= $s['saroId'] ?>"
                                             data-no="<?= $saroNoEsc ?>"
@@ -605,17 +661,28 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                                             data-valid="<?= $s['valid_until'] ?? '' ?>">
                                             <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
                                         </button>
+                                        <?php endif; ?>
+                                        <?php if ($canCancel): ?>
                                         <button class="action-btn action-btn-cancel" title="Cancel SARO"
                                             data-id="<?= $s['saroId'] ?>"
                                             data-no="<?= $saroNoEsc ?>">
                                             <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
                                         </button>
+                                        <?php endif; ?>
+                                        <?php if ($canDelete): ?>
                                         <button class="action-btn action-btn-del" title="Delete SARO"
                                             data-id="<?= $s['saroId'] ?>"
                                             data-no="<?= $saroNoEsc ?>">
                                             <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                                         </button>
-                                        <?php else: ?>
+                                        <?php endif; ?>
+                                        <?php if ($isOwner): ?>
+                                        <button class="action-btn action-btn-manage" title="Manage Access"
+                                            onclick="openManageAccessModal(<?= $s['saroId'] ?>, '<?= $saroNoEsc ?>')">
+                                            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                                        </button>
+                                        <?php endif; ?>
+                                        <?php if (!$isOwner && !$canEdit && !$canCancel && !$canDelete): ?>
                                         <span style="font-size:10px;color:#cbd5e1;font-style:italic;padding:4px 8px;">View only</span>
                                         <?php endif; ?>
                                     </div>
@@ -912,6 +979,42 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
     </div>
 </div>
 
+<!-- ══ Manage Access Modal ══ -->
+<div id="manageAccessModal" style="display:none;position:fixed;inset:0;z-index:100;
+     background:rgba(15,23,42,0.55);backdrop-filter:blur(4px);
+     align-items:center;justify-content:center;padding:24px;">
+    <div style="background:#fff;border-radius:18px;width:100%;max-width:560px;
+                box-shadow:0 24px 64px rgba(0,0,0,0.18);overflow:hidden;">
+        <input type="hidden" id="manage-saro-id">
+
+        <!-- Header -->
+        <div style="padding:22px 28px;display:flex;align-items:center;justify-content:space-between;
+                    background:linear-gradient(135deg,#4c1d95,#7c3aed);">
+            <div>
+                <p style="font-size:10px;font-weight:700;color:rgba(255,255,255,0.5);
+                           text-transform:uppercase;letter-spacing:0.14em;margin-bottom:4px;">Delegated Access</p>
+                <h3 id="manage-saro-no-label" style="font-size:16px;font-weight:900;color:#fff;"></h3>
+            </div>
+            <button onclick="closeManageAccessModal()"
+                    style="width:32px;height:32px;border-radius:8px;background:rgba(255,255,255,0.12);
+                           border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#fff;">
+                <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+
+        <!-- Body (rendered by JS) -->
+        <div id="manage-access-body" style="padding:24px 28px;max-height:72vh;overflow-y:auto;">
+            <div style="text-align:center;padding:32px;color:#94a3b8;font-size:13px;">Loading…</div>
+        </div>
+
+        <!-- Footer -->
+        <div style="padding:16px 28px;border-top:1px solid #f1f5f9;background:#fafbfe;
+                    display:flex;align-items:center;justify-content:flex-end;">
+            <button class="btn btn-ghost" onclick="closeManageAccessModal()">Close</button>
+        </div>
+    </div>
+</div>
+
 <script>
     function openAddSaroModal()  { document.getElementById('addSaroModal').style.display = 'flex'; }
     function closeAddSaroModal() { document.getElementById('addSaroModal').style.display = 'none'; }
@@ -1169,6 +1272,153 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
             if (hint) hint.style.display = '';
         }
     }
+
+    // ── Manage Access ──────────────────────────────────────
+    function openManageAccessModal(saroId, saroNo) {
+        document.getElementById('manage-saro-id').value        = saroId;
+        document.getElementById('manage-saro-no-label').textContent = 'SARO ' + saroNo;
+        document.getElementById('manageAccessModal').style.display = 'flex';
+        loadManageAccess(saroId);
+    }
+
+    function closeManageAccessModal() {
+        document.getElementById('manageAccessModal').style.display = 'none';
+    }
+
+    document.getElementById('manageAccessModal').addEventListener('click', function(e) {
+        if (e.target === this) closeManageAccessModal();
+    });
+
+    function loadManageAccess(saroId) {
+        const body = document.getElementById('manage-access-body');
+        body.innerHTML = '<div style="text-align:center;padding:32px;color:#94a3b8;font-size:13px;">Loading…</div>';
+        const fd = new FormData();
+        fd.append('action',  'get_permissions');
+        fd.append('saro_id', saroId);
+        fetch('data_entry.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(res => {
+                if (!res.success) {
+                    body.innerHTML = '<p style="color:#dc2626;font-size:13px;">' + (res.error || 'Error loading.') + '</p>';
+                    return;
+                }
+                renderManageAccess(res.others, res.grants, saroId);
+            });
+    }
+
+    function renderManageAccess(others, grants, saroId) {
+        const body = document.getElementById('manage-access-body');
+        let html = '';
+
+        // Grant new access section
+        html += '<p style="font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:12px;">Grant Access</p>';
+        if (others.length === 0) {
+            html += '<p style="font-size:12px;color:#94a3b8;font-style:italic;margin-bottom:20px;">All other admins already have access, or no other admins exist.</p>';
+        } else {
+            html += '<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">';
+            html += '<select id="grant-admin-select" style="width:100%;padding:9px 14px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;font-family:\'Poppins\',sans-serif;font-weight:500;color:#0f172a;background:#f8fafc;outline:none;">';
+            html += '<option value="">Select admin to grant access…</option>';
+            others.forEach(u => {
+                html += `<option value="${u.userId}">${u.full_name}</option>`;
+            });
+            html += '</select>';
+            html += '<div style="display:flex;gap:20px;">';
+            [['edit','Edit'],['cancel','Cancel'],['delete','Delete']].forEach(([key, label]) => {
+                html += `<label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#475569;cursor:pointer;">
+                    <input type="checkbox" id="grant-can-${key}" style="width:14px;height:14px;accent-color:#7c3aed;cursor:pointer;">
+                    Can ${label}
+                </label>`;
+            });
+            html += '</div>';
+            html += `<div><button onclick="submitGrantPermission(${saroId})"
+                style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:9px;
+                       background:#7c3aed;color:#fff;border:none;font-size:11px;font-weight:700;
+                       font-family:'Poppins',sans-serif;cursor:pointer;"
+                onmouseover="this.style.background='#6d28d9'"
+                onmouseout="this.style.background='#7c3aed'">
+                <svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+                Grant Access
+            </button></div>`;
+            html += '</div>';
+        }
+
+        // Divider
+        html += '<div style="border-top:1px solid #f1f5f9;margin-bottom:20px;"></div>';
+
+        // Current grants section
+        html += '<p style="font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:12px;">Current Grants</p>';
+        if (grants.length === 0) {
+            html += '<p style="font-size:12px;color:#94a3b8;font-style:italic;">No access has been granted yet.</p>';
+        } else {
+            html += '<div style="display:flex;flex-direction:column;gap:8px;">';
+            grants.forEach(g => {
+                html += `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;
+                                     background:#f8fafc;border:1px solid #e8edf5;border-radius:10px;">
+                    <div style="flex:1;font-size:13px;font-weight:700;color:#0f172a;">${g.grantee_name}</div>
+                    <div style="display:flex;gap:6px;">
+                        ${permBadge('Edit',   g.can_edit)}
+                        ${permBadge('Cancel', g.can_cancel)}
+                        ${permBadge('Delete', g.can_delete)}
+                    </div>
+                    <button onclick="submitRevokePermission(${saroId}, ${g.granted_to})"
+                            style="padding:4px 10px;border-radius:7px;border:1px solid #fecaca;
+                                   background:#fee2e2;color:#dc2626;font-size:10px;font-weight:700;
+                                   font-family:'Poppins',sans-serif;cursor:pointer;"
+                            onmouseover="this.style.background='#fecaca'"
+                            onmouseout="this.style.background='#fee2e2'">
+                        Revoke
+                    </button>
+                </div>`;
+            });
+            html += '</div>';
+        }
+
+        body.innerHTML = html;
+    }
+
+    function permBadge(label, val) {
+        const on = parseInt(val) === 1;
+        const s  = on
+            ? 'background:#dcfce7;color:#16a34a;border:1px solid #bbf7d0;'
+            : 'background:#f1f5f9;color:#94a3b8;border:1px solid #e2e8f0;';
+        return `<span style="padding:2px 8px;border-radius:99px;font-size:9px;font-weight:700;${s}">${label}</span>`;
+    }
+
+    function submitGrantPermission(saroId) {
+        const grantedTo = document.getElementById('grant-admin-select').value;
+        const canEdit   = document.getElementById('grant-can-edit').checked   ? 1 : 0;
+        const canCancel = document.getElementById('grant-can-cancel').checked ? 1 : 0;
+        const canDelete = document.getElementById('grant-can-delete').checked ? 1 : 0;
+        if (!grantedTo) { alert('Please select an admin.'); return; }
+        if (!canEdit && !canCancel && !canDelete) { alert('Please select at least one permission.'); return; }
+        const fd = new FormData();
+        fd.append('action',     'grant_permission');
+        fd.append('saro_id',    saroId);
+        fd.append('granted_to', grantedTo);
+        fd.append('can_edit',   canEdit);
+        fd.append('can_cancel', canCancel);
+        fd.append('can_delete', canDelete);
+        fetch('data_entry.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(res => {
+                if (res.success) loadManageAccess(saroId);
+                else alert(res.error || 'Error granting permission.');
+            });
+    }
+
+    function submitRevokePermission(saroId, grantedTo) {
+        const fd = new FormData();
+        fd.append('action',     'revoke_permission');
+        fd.append('saro_id',    saroId);
+        fd.append('granted_to', grantedTo);
+        fetch('data_entry.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(res => {
+                if (res.success) loadManageAccess(saroId);
+                else alert(res.error || 'Error revoking permission.');
+            });
+    }
+    // ────────────────────────────────────────────────────────
 
     // Auto-clear red border on input
     document.addEventListener('input', function(e) {

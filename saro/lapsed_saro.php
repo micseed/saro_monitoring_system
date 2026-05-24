@@ -1,7 +1,56 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../class/saro.php';
 require_once __DIR__ . '/../class/notification.php';
+
+// ── AJAX handler ─────────────────────────────────────────────────────────────
+if (!empty($_POST['ajax_action'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    require_once __DIR__ . '/../class/Database.php';
+    $db     = new Database();
+    $conn   = $db->connect();
+    $saroId = (int)($_POST['saroId'] ?? 0);
+    $userId = (int)($_SESSION['user_id'] ?? 0);
+
+    if ($_POST['ajax_action'] === 'extend_saro') {
+        if (!$saroId || !$userId) {
+            echo json_encode(['success' => false, 'error' => 'Invalid request.']);
+            exit;
+        }
+        // Ownership check
+        $ownerStmt = $conn->prepare('SELECT userId, saroNo FROM saro WHERE saroId = ? AND status = ?');
+        $ownerStmt->execute([$saroId, 'lapsed']);
+        $saroRow = $ownerStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$saroRow) {
+            echo json_encode(['success' => false, 'error' => 'SARO not found or not lapsed.']);
+            exit;
+        }
+        if ((int)$saroRow['userId'] !== $userId) {
+            echo json_encode(['success' => false, 'error' => 'Only the SARO owner can extend this record.']);
+            exit;
+        }
+        $newValidUntil = trim($_POST['valid_until'] ?? '');
+        if (!$newValidUntil || strtotime($newValidUntil) === false) {
+            echo json_encode(['success' => false, 'error' => 'Please provide a valid new expiry date.']);
+            exit;
+        }
+        if (strtotime($newValidUntil) <= strtotime('today')) {
+            echo json_encode(['success' => false, 'error' => 'New expiry date must be in the future.']);
+            exit;
+        }
+        $conn->prepare("UPDATE saro SET status = 'active', valid_until = ? WHERE saroId = ?")
+             ->execute([$newValidUntil, $saroId]);
+        $conn->prepare("INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address) VALUES (?, 'edit', ?, 'saro', ?, ?)")
+             ->execute([$userId, "Extended lapsed SARO: {$saroRow['saroNo']} — new valid until {$newValidUntil}", $saroId, $_SERVER['REMOTE_ADDR'] ?? '']);
+        echo json_encode(['success' => true]);
+        exit;
+    }
+
+    echo json_encode(['success' => false, 'error' => 'Unknown action.']);
+    exit;
+}
+// ── End AJAX handler ──────────────────────────────────────────────────────────
+
 $saroObj = new Saro();
 $userId  = (int)$_SESSION['user_id'];
 $saroObj->checkAndAutoUpdateStatus($userId);
@@ -66,7 +115,31 @@ tbody td { padding: 14px 20px; font-size: 13px; color: #475569; }
 .badge-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .search-wrap { position: relative; }
 .search-input { padding: 8px 12px 8px 36px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; font-size: 12px; font-family: 'Poppins',sans-serif; width: 220px; outline: none; }
+.search-input:focus { border-color: #3b82f6; background: #fff; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
 .search-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: #94a3b8; pointer-events: none; }
+.action-btn { width: 30px; height: 30px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; cursor: pointer; background: transparent; transition: all 0.2s ease; text-decoration: none; }
+.action-btn-view { color: #2563eb; }
+.action-btn-view:hover { background: #dbeafe; border-color: #bfdbfe; }
+.action-btn-extend { color: #16a34a; }
+.action-btn-extend:hover { background: #dcfce7; border-color: #bbf7d0; }
+/* Modal */
+.modal-overlay { position:fixed;inset:0;z-index:200;background:rgba(15,23,42,0.55);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;padding:24px; }
+.modal-overlay.open { display:flex; }
+.modal-card { background:#fff;border-radius:18px;width:100%;max-width:460px;box-shadow:0 24px 64px rgba(0,0,0,0.18);overflow:hidden; }
+.modal-header { padding:22px 28px;background:linear-gradient(135deg,#14532d,#16a34a);display:flex;align-items:center;justify-content:space-between; }
+.modal-body { padding:24px 28px;display:flex;flex-direction:column;gap:16px; }
+.modal-footer { padding:16px 28px;border-top:1px solid #f1f5f9;background:#fafbfe;display:flex;align-items:center;justify-content:flex-end;gap:10px; }
+.modal-close-btn { width:32px;height:32px;border-radius:8px;background:rgba(255,255,255,0.12);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#fff; }
+.form-label { display:block;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px; }
+.form-input { width:100%;padding:9px 14px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;font-weight:500;color:#0f172a;font-family:'Poppins',sans-serif;background:#f8fafc;outline:none;transition:all 0.2s ease; }
+.form-input:focus { border-color:#3b82f6;background:#fff;box-shadow:0 0 0 3px rgba(59,130,246,0.1); }
+.btn { display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:9px;font-size:12px;font-weight:600;font-family:'Poppins',sans-serif;cursor:pointer;text-decoration:none;transition:all 0.2s ease;border:1px solid transparent; }
+.btn-green { background:#16a34a;color:#fff;border-color:#16a34a; }
+.btn-green:hover { background:#15803d;border-color:#15803d;box-shadow:0 4px 12px rgba(22,163,74,0.3); }
+.btn-ghost { background:#f8fafc;color:#475569;border-color:#e2e8f0; }
+.btn-ghost:hover { border-color:#94a3b8;color:#0f172a;background:#f1f5f9; }
+.alert-box { padding:10px 14px;border-radius:9px;font-size:12px;font-weight:600;display:none; }
+.alert-error { background:#fee2e2;color:#dc2626;border:1px solid #fecaca; }
 </style>
 </head><body>
 <div class="layout">
@@ -84,8 +157,8 @@ tbody td { padding: 14px 20px; font-size: 13px; color: #475569; }
     <a href="data_entry.php" class="nav-item"><svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>Data Entry</a>
     <a href="procurement_stat.php" class="nav-item"><svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>Procurement Status</a>
     <p class="nav-section-label">Reports</p>
-    
-    <a href="export_records.php" class="nav-item"><svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>Export Records</a>    <a href="audit_logs.php" class="nav-item"><svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Activity Logs</a>
+    <a href="export_records.php" class="nav-item"><svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>Export Records</a>
+    <a href="audit_logs.php" class="nav-item"><svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Activity Logs</a>
     <p class="nav-section-label">History</p>
     <a href="cancelled_saro.php" class="nav-item"><svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>Cancelled SAROs<?php if ($cancelledCount > 0): ?><span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#b45309;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $cancelledCount ?></span><?php endif; ?></a>
     <a href="obligated_saro.php" class="nav-item"><svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Obligated SAROs<?php if ($obligatedCount > 0): ?><span style="margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:#16a34a;color:#fff;font-size:9px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;"><?= $obligatedCount ?></span><?php endif; ?></a>
@@ -126,7 +199,7 @@ tbody td { padding: 14px 20px; font-size: 13px; color: #475569; }
       <div style="position:relative;z-index:1;">
         <p style="font-size:10px;font-weight:700;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:0.16em;margin-bottom:6px;">SARO History</p>
         <h2 style="font-size:22px;font-weight:900;color:#fff;text-transform:uppercase;letter-spacing:-0.01em;margin-bottom:6px;">Lapsed SAROs</h2>
-        <p style="font-size:13px;color:rgba(255,255,255,0.6);font-weight:400;max-width:520px;line-height:1.6;">SAROs that did not reach their total budget before the declared validity period ended.</p>
+        <p style="font-size:13px;color:rgba(255,255,255,0.6);font-weight:400;max-width:520px;line-height:1.6;">SAROs that expired before full budget utilization. Owners can extend the validity date to reactivate.</p>
       </div>
     </div>
     <div class="table-panel">
@@ -147,42 +220,100 @@ tbody td { padding: 14px 20px; font-size: 13px; color: #475569; }
           <thead><tr>
             <th style="width:52px;">No.</th><th>SARO No.</th><th>SARO Title</th>
             <th style="text-align:right;">Total Budget</th><th style="text-align:center;">Object Codes</th>
-            <th style="text-align:center;">Valid Until</th><th style="text-align:center;">Created By</th><th style="text-align:center;">Status</th>
+            <th style="text-align:center;">Expired On</th><th style="text-align:center;">Created By</th>
+            <th style="text-align:center;">Status</th><th style="text-align:center;">Actions</th>
           </tr></thead>
           <tbody id="lapsedTbody">
             <?php if (empty($lapsedSaros)): ?>
-            <tr><td colspan="8" style="text-align:center;padding:52px 20px;color:#94a3b8;">
+            <tr><td colspan="9" style="text-align:center;padding:52px 20px;color:#94a3b8;">
               <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
                 <svg width="40" height="40" fill="none" stroke="#cbd5e1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 <p style="font-size:13px;font-weight:600;color:#94a3b8;">No lapsed SAROs</p>
               </div>
             </td></tr>
             <?php else: foreach ($lapsedSaros as $i => $s):
-              $rowNum = str_pad($i+1,2,'0',STR_PAD_LEFT);
+              $rowNum   = str_pad($i+1,2,'0',STR_PAD_LEFT);
               $validFmt = $s['valid_until'] ? date('M d, Y', strtotime($s['valid_until'])) : '—';
+              $isOwner  = (int)$s['userId'] === $userId;
             ?>
             <tr class="lapsed-row" style="opacity:0.9;">
               <td style="color:#cbd5e1;font-weight:700;font-size:12px;"><?= $rowNum ?></td>
               <td><span style="font-weight:800;color:#64748b;font-size:13px;"><?= htmlspecialchars($s['saroNo']) ?></span></td>
-              <td style="max-width:260px;"><p style="font-weight:500;color:#94a3b8;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= htmlspecialchars($s['saro_title']) ?></p></td>
+              <td style="max-width:240px;"><p style="font-weight:500;color:#94a3b8;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= htmlspecialchars($s['saro_title']) ?></p></td>
               <td style="text-align:right;"><span style="font-weight:800;color:#64748b;font-size:13px;">₱<?= number_format((float)$s['total_budget'],2) ?></span></td>
               <td style="text-align:center;"><span style="font-size:11px;font-weight:700;color:#64748b;background:#f1f5f9;padding:3px 10px;border-radius:99px;"><?= (int)$s['obj_count'] ?> <?= (int)$s['obj_count'] === 1 ? 'code' : 'codes' ?></span></td>
               <td style="text-align:center;"><span style="font-size:11px;font-weight:600;color:#dc2626;"><?= $validFmt ?></span></td>
               <td style="text-align:center;"><span style="font-size:11px;color:#64748b;"><?= htmlspecialchars($s['owner_name'] ?? '—') ?></span></td>
               <td style="text-align:center;"><span class="badge badge-red"><span class="badge-dot"></span>Lapsed</span></td>
+              <td style="text-align:center;">
+                <div style="display:inline-flex;align-items:center;gap:4px;">
+                  <a href="view_saro.php?id=<?= (int)$s['saroId'] ?>" class="action-btn action-btn-view" title="View SARO details">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                  </a>
+                  <?php if ($isOwner): ?>
+                  <button class="action-btn action-btn-extend"
+                          title="Extend validity date"
+                          onclick="openExtendModal(<?= (int)$s['saroId'] ?>, '<?= htmlspecialchars($s['saroNo'], ENT_QUOTES) ?>')">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                  </button>
+                  <?php endif; ?>
+                </div>
+              </td>
             </tr>
             <?php endforeach; endif; ?>
           </tbody>
         </table>
       </div>
       <div class="panel-footer">
-        <div></div>
+        <p style="font-size:11px;color:#94a3b8;font-weight:500;">
+          <svg width="11" height="11" fill="none" stroke="#94a3b8" viewBox="0 0 24 24" style="display:inline;vertical-align:middle;margin-right:3px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          Owners can extend a lapsed SARO to reactivate it.
+        </p>
         <p style="font-size:11px;color:#94a3b8;font-weight:500;"><strong style="color:#475569;"><?= $lapsedCount ?></strong> lapsed SARO <?= $lapsedCount === 1 ? 'entry' : 'entries' ?></p>
       </div>
     </div>
   </div>
 </main>
 </div>
+
+<!-- ── Extend Modal ──────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="extendModal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="width:34px;height:34px;border-radius:9px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;">
+          <svg width="16" height="16" fill="none" stroke="#fff" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        </div>
+        <div>
+          <p style="font-size:13px;font-weight:800;color:#fff;line-height:1.2;">Extend SARO</p>
+          <p style="font-size:10px;color:rgba(255,255,255,0.55);font-weight:500;" id="extendModalSubtitle">Set a new validity date to reactivate this SARO</p>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeExtendModal()">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div style="padding:12px 14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:9px;">
+        <p style="font-size:12px;color:#15803d;font-weight:600;line-height:1.5;">Setting a new expiry date will restore this SARO to <strong>Active</strong> status so procurement can continue.</p>
+      </div>
+      <div>
+        <label class="form-label" for="extendDate">New Valid Until Date</label>
+        <input type="date" id="extendDate" class="form-input">
+      </div>
+      <div class="alert-box alert-error" id="extendError"></div>
+      <input type="hidden" id="extendSaroId">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeExtendModal()">Cancel</button>
+      <button class="btn btn-green" id="extendBtn" onclick="submitExtend()">
+        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        Extend &amp; Reactivate
+      </button>
+    </div>
+  </div>
+</div>
+
 <script>
 function filterRows(q) {
     q = q.toLowerCase();
@@ -190,6 +321,72 @@ function filterRows(q) {
         r.style.display = r.textContent.toLowerCase().includes(q) ? '' : 'none';
     });
 }
+
+function openExtendModal(saroId, saroNo) {
+    document.getElementById('extendSaroId').value = saroId;
+    document.getElementById('extendModalSubtitle').textContent = saroNo;
+    // Default to today + 1 year
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + 1);
+    document.getElementById('extendDate').value = d.toISOString().split('T')[0];
+    // Min is tomorrow
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    document.getElementById('extendDate').min = tomorrow.toISOString().split('T')[0];
+    document.getElementById('extendError').style.display = 'none';
+    document.getElementById('extendModal').classList.add('open');
+}
+
+function closeExtendModal() {
+    document.getElementById('extendModal').classList.remove('open');
+}
+
+function submitExtend() {
+    const saroId     = document.getElementById('extendSaroId').value;
+    const validUntil = document.getElementById('extendDate').value;
+    const errBox     = document.getElementById('extendError');
+    const btn        = document.getElementById('extendBtn');
+
+    errBox.style.display = 'none';
+    if (!validUntil) {
+        errBox.textContent = 'Please select a new expiry date.';
+        errBox.style.display = 'block';
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+
+    const fd = new FormData();
+    fd.append('ajax_action', 'extend_saro');
+    fd.append('saroId', saroId);
+    fd.append('valid_until', validUntil);
+
+    fetch('lapsed_saro.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                closeExtendModal();
+                window.location.reload();
+            } else {
+                errBox.textContent = data.error || 'An error occurred. Please try again.';
+                errBox.style.display = 'block';
+                btn.disabled = false;
+                btn.innerHTML = '<svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Extend &amp; Reactivate';
+            }
+        })
+        .catch(() => {
+            errBox.textContent = 'Network error. Please try again.';
+            errBox.style.display = 'block';
+            btn.disabled = false;
+            btn.innerHTML = '<svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Extend &amp; Reactivate';
+        });
+}
+
+// Close modal on overlay click
+document.getElementById('extendModal').addEventListener('click', function(e) {
+    if (e.target === this) closeExtendModal();
+});
 </script>
 <script src="../assets/js/table_controls.js"></script>
 </body></html>

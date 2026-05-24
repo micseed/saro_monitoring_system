@@ -82,6 +82,91 @@ class Saro extends Database {
         return $row && (int)$row['userId'] === $userId;
     }
 
+    /** Returns true if $userId has the given permission column on a SARO they don't own. */
+    public function hasPermission(int $saroId, int $userId, string $column): bool {
+        if (!in_array($column, ['can_edit', 'can_cancel', 'can_delete'], true)) return false;
+        $stmt = $this->connect()->prepare("SELECT {$column} FROM saro_permissions WHERE saro_id = ? AND granted_to = ?");
+        $stmt->execute([$saroId, $userId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row && (int)$row[$column] === 1;
+    }
+
+    /** Fetch all delegated permissions for $userId keyed by saroId. */
+    public function getMyPermissions(int $userId): array {
+        $stmt = $this->connect()->prepare(
+            "SELECT saro_id, can_edit, can_cancel, can_delete FROM saro_permissions WHERE granted_to = ?"
+        );
+        $stmt->execute([$userId]);
+        $result = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $result[(int)$row['saro_id']] = $row;
+        }
+        return $result;
+    }
+
+    /** Get all active Admin users who have not yet been granted access to this SARO. */
+    public function getOtherAdmins(int $saroId, int $ownerId): array {
+        $stmt = $this->connect()->prepare("
+            SELECT u.userId, CONCAT(u.first_name, ' ', u.last_name) AS full_name
+            FROM user u
+            JOIN user_role r ON r.roleId = u.roleId
+            WHERE r.role = 'Admin'
+              AND u.status = 'active'
+              AND u.userId != ?
+              AND u.userId NOT IN (
+                  SELECT granted_to FROM saro_permissions WHERE saro_id = ?
+              )
+            ORDER BY u.first_name ASC
+        ");
+        $stmt->execute([$ownerId, $saroId]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /** Get all existing permission grants for a SARO (with grantee names). */
+    public function getPermissionsForSaro(int $saroId): array {
+        $stmt = $this->connect()->prepare("
+            SELECT sp.id, sp.granted_to, sp.can_edit, sp.can_cancel, sp.can_delete,
+                   CONCAT(u.first_name, ' ', u.last_name) AS grantee_name
+            FROM saro_permissions sp
+            JOIN user u ON u.userId = sp.granted_to
+            WHERE sp.saro_id = ?
+            ORDER BY u.first_name ASC
+        ");
+        $stmt->execute([$saroId]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /** Upsert a permission grant (insert or update on duplicate saro+user). */
+    public function savePermission(int $saroId, int $grantedBy, int $grantedTo, int $canEdit, int $canCancel, int $canDelete): array {
+        try {
+            $this->connect()->prepare("
+                INSERT INTO saro_permissions (saro_id, granted_by, granted_to, can_edit, can_cancel, can_delete)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    granted_by = VALUES(granted_by),
+                    can_edit   = VALUES(can_edit),
+                    can_cancel = VALUES(can_cancel),
+                    can_delete = VALUES(can_delete),
+                    updated_at = NOW()
+            ")->execute([$saroId, $grantedBy, $grantedTo, $canEdit, $canCancel, $canDelete]);
+            return ['success' => true];
+        } catch (Exception $e) {
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /** Remove a permission grant entirely. */
+    public function revokePermission(int $saroId, int $grantedTo): array {
+        try {
+            $this->connect()->prepare(
+                "DELETE FROM saro_permissions WHERE saro_id = ? AND granted_to = ?"
+            )->execute([$saroId, $grantedTo]);
+            return ['success' => true];
+        } catch (Exception $e) {
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
     public function updateSaro($saroId, $saroNo, $title, $year, $budget, $status, $userId = 0, $dateReleased = null, $validUntil = null) {
         try {
             $conn = $this->connect();
