@@ -14,7 +14,7 @@ CREATE TABLE user_role (
 );
 
 INSERT INTO user_role (role) VALUES
-    ('Super Admin'),
+    ('System Admin'),
     ('Admin');
 
 
@@ -92,7 +92,6 @@ CREATE TABLE saro (
     userId         INT,
     saroNo         VARCHAR(50)   NOT NULL UNIQUE,
     saro_title     VARCHAR(150)  NOT NULL,
-    fiscal_year    YEAR          NOT NULL,
     total_budget   DECIMAL(15,2) NOT NULL,
     date_released  DATE,
     valid_until    DATE,
@@ -183,6 +182,7 @@ INSERT INTO required_documents (document_name, applies_to_regular, applies_to_tr
     ('Notice of Award',           TRUE,  FALSE, 6),
     ('Notice to Proceed',         TRUE,  FALSE, 7),
     ('Inspection and Acceptance', TRUE,  FALSE, 8),
+    ('Market Scoping',            TRUE,  FALSE, 9),
     ('Travel Order',              FALSE, TRUE,  1),
     ('Itinerary',                 FALSE, TRUE,  2),
     ('Certificate of Travel',     FALSE, TRUE,  3),

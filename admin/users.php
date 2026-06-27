@@ -67,6 +67,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $newId,
                 $_SERVER['REMOTE_ADDR'] ?? null
             ]);
+            
+            // Clear POST variables so the modal form is empty when opened again
+            $_POST = [];
         }
     }
 }
@@ -122,7 +125,7 @@ if (isset($_GET['deleted']))     { $flashMsg = 'User account has been permanentl
 if (isset($_GET['deactivated'])) { $flashMsg = 'User has linked records and cannot be fully deleted. The account has been deactivated instead.'; $flashType = 'amber'; }
 
 // ── Fetch dynamic data ───────────────────────────────
-$roles = $pdo->query("SELECT roleId, role FROM user_role ORDER BY roleId")->fetchAll();
+$roles = $pdo->query("SELECT roleId, role FROM user_role WHERE LOWER(role) NOT LIKE '%system%' ORDER BY roleId")->fetchAll();
 $pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHERE status = 'pending'")->fetchColumn();
 
 // Fetch Users with their Creator's Name
@@ -132,6 +135,7 @@ $usersQuery = $pdo->query("
     FROM user u
     JOIN user_role ur ON u.roleId = ur.roleId
     LEFT JOIN user c ON u.created_by = c.userId
+    WHERE LOWER(ur.role) NOT LIKE '%system%'
     ORDER BY u.created_at DESC
 ");
 $allUsers = $usersQuery->fetchAll();
@@ -207,14 +211,13 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
         .signout-btn:hover { background: rgba(239,68,68,0.12); color: #fca5a5; }
 
         /* ── Main ── */
-        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
         .topbar { height: 64px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; background: #fff; border-bottom: 1px solid #e8edf5; }
         .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #64748b; }
         .breadcrumb-active { color: #0f172a; }
         .topbar-right { display: flex; align-items: center; gap: 16px; }
         .icon-btn { width: 36px; height: 36px; border-radius: 9px; background: #f8fafc; border: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; transition: all 0.2s ease; position: relative; }
         .icon-btn:hover { border-color: #ef4444; color: #dc2626; background: #fef2f2; }
-        .notif-dot { position: absolute; top: 7px; right: 7px; width: 7px; height: 7px; background: #ef4444; border-radius: 50%; border: 1.5px solid #fff; }
         .content { flex: 1; overflow-y: auto; padding: 28px 32px; }
 
         /* ── Hero ── */
@@ -372,6 +375,11 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
             </a>
+            <p class="nav-section-label">Reports</p>
+            <a href="export_records.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                Export Records
+            </a>
         </nav>
         <div class="sidebar-footer">
             <div class="user-card">
@@ -497,12 +505,12 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                     <div style="display:flex;align-items:center;gap:10px;">
                         <div class="search-wrap">
                             <svg class="search-icon" width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                            <input type="text" class="search-input" placeholder="Search users…">
+                            <input type="text" class="search-input" id="userSearch" placeholder="Search users...">
                         </div>
-                        <select class="role-filter-select" aria-label="Filter by role">
-                            <option>All Roles</option>
+                        <select class="role-filter-select" id="roleFilter" aria-label="Filter by role">
+                            <option value="">All Roles</option>
                             <?php foreach ($roles as $r): ?>
-                                <option><?= htmlspecialchars($r['role']) ?></option>
+                                <option value="<?= htmlspecialchars($r['role']) ?>"><?= htmlspecialchars($r['role']) ?></option>
                             <?php endforeach; ?>
                         </select>
                         <button class="btn btn-primary" onclick="openModal()">
@@ -541,7 +549,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                                     }
 
                                     $roleClass = 'role-viewer';
-                                    if (strpos(strtolower($u['role']), 'super') !== false || strpos(strtolower($u['role']), 'admin') !== false) {
+                                    if (strpos(strtolower($u['role']), 'system') !== false || strpos(strtolower($u['role']), 'admin') !== false) {
                                         $roleClass = 'role-admin';
                                     } elseif (strpos(strtolower($u['role']), 'encoder') !== false) {
                                         $roleClass = 'role-encoder';
@@ -551,7 +559,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                                     
                                     $creatorName = !empty($u['creator_fname']) ? htmlspecialchars($u['creator_fname'] . ' ' . $u['creator_lname']) : 'System Setup';
                                 ?>
-                                <tr>
+                                <tr class="user-row" data-status="<?= htmlspecialchars($u['status']) ?>" data-role="<?= htmlspecialchars($u['role']) ?>">
                                     <td style="color:#cbd5e1;font-weight:700;font-size:12px;"><?= str_pad($index + 1, 2, '0', STR_PAD_LEFT) ?></td>
                                     <td>
                                         <div style="display:flex;align-items:center;gap:10px;">
@@ -599,10 +607,15 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                 </div>
 
                 <div class="panel-footer">
-                    <p style="font-size:11px;color:#94a3b8;font-weight:500;">Displaying <strong style="color:#475569;"><?= count($allUsers) ?></strong> users</p>
-                    <div style="display:flex;align-items:center;gap:8px;">
-                        <div class="show-rows-wrap"><span>Show</span><select class="show-rows-select"><option>10 rows</option><option selected>20 rows</option><option>50 rows</option></select></div>
+                    <div class="show-rows-wrap">
+                        <span>Show</span>
+                        <select class="show-rows-select" id="userRows">
+                            <option value="10" selected>10</option>
+                            <option value="20">20</option>
+                            <option value="50">50</option>
+                        </select>
                     </div>
+                    <p style="font-size:11px;color:#94a3b8;font-weight:500;">Displaying <strong style="color:#475569;" id="row-count"><?= count($allUsers) ?></strong> of <strong style="color:#475569;"><?= count($allUsers) ?></strong> users</p>
                 </div>
             </div>
 
@@ -681,7 +694,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                     <div class="form-group">
                         <label class="form-label">Role <span style="color:#dc2626;">*</span></label>
                         <select name="roleId" class="form-select ca-req">
-                            <option value="">Select role…</option>
+                            <option value="">Select role...</option>
                             <?php foreach ($roles as $r): ?>
                             <option value="<?= $r['roleId'] ?>" <?= (($_POST['roleId'] ?? '') == $r['roleId']) ? 'selected' : '' ?>>
                                 <?= htmlspecialchars($r['role']) ?>
@@ -950,6 +963,34 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
     });
     <?php endif; ?>
 </script>
-<script src="../assets/js/table_controls.js"></script>
+<script>
+(function () {
+    var allRows  = Array.from(document.querySelectorAll('.user-row'));
+    var searchEl = document.getElementById('userSearch');
+    var roleSel  = document.getElementById('roleFilter');
+    var rowsSel  = document.getElementById('userRows');
+    var countEl  = document.getElementById('row-count');
+
+    function apply() {
+        var q     = searchEl ? searchEl.value.trim().toLowerCase() : '';
+        var role  = roleSel  ? roleSel.value : '';
+        var limit = rowsSel  ? (parseInt(rowsSel.value, 10) || 10) : 10;
+        var shown = 0;
+        allRows.forEach(function (row) {
+            var roleMatch   = !role || row.dataset.role === role;
+            var searchMatch = !q || row.textContent.toLowerCase().includes(q);
+            var show = roleMatch && searchMatch && shown < limit;
+            row.style.display = show ? '' : 'none';
+            if (show) shown++;
+        });
+        if (countEl) countEl.textContent = shown;
+    }
+
+    if (searchEl) searchEl.addEventListener('input', apply);
+    if (roleSel)  roleSel.addEventListener('change', apply);
+    if (rowsSel)  rowsSel.addEventListener('change', apply);
+    apply();
+})();
+</script>
 </body>
 </html>

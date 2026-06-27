@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -17,7 +17,7 @@ $role     = $_SESSION['role'] ?? 'Role';
 $initials = $_SESSION['initials'] ?? 'U';
 $userId   = (int)($_SESSION['user_id'] ?? 0);
 
-// Fetch dynamic data — Admin users only, Super Admin excluded
+// Fetch dynamic data — Admin users only, System Admin excluded
 $users = $accountObj->getAdminOnlyUsers();
 $logs  = $accountObj->getAdminAuditLogs(100);
 
@@ -64,7 +64,7 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
 
         .layout { display: flex; height: 100vh; }
 
-        /* ── Sidebar ── */
+        /* -- Sidebar -- */
         .sidebar {
             width: 256px; flex-shrink: 0;
             display: flex; flex-direction: column;
@@ -134,8 +134,8 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
         }
         .signout-btn:hover { background: rgba(239,68,68,0.12); color: #fca5a5; }
 
-        /* ── Main ── */
-        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        /* -- Main -- */
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
         .topbar {
             height: 64px; flex-shrink: 0;
             display: flex; align-items: center; justify-content: space-between;
@@ -152,11 +152,6 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
             transition: all 0.2s ease; position: relative;
         }
         .icon-btn:hover { border-color: #3b82f6; color: #2563eb; background: #eff6ff; }
-        .notif-dot {
-            position: absolute; top: 7px; right: 7px;
-            width: 7px; height: 7px; background: #ef4444;
-            border-radius: 50%; border: 1.5px solid #fff;
-        }
         .content { flex: 1; overflow-y: auto; padding: 28px 32px; }
 
         /* Hero */
@@ -196,12 +191,11 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
         .search-input:focus { border-color: #3b82f6; background: #fff; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
         .search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: #94a3b8; pointer-events: none; }
 
-        /* Two-column panels grid */
+        /* Stacked panels */
         .panels-grid {
-            display: grid;
-            grid-template-columns: 1fr 1.55fr;
+            display: flex;
+            flex-direction: column;
             gap: 20px;
-            align-items: start;
         }
 
         /* Table panel */
@@ -279,6 +273,12 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
             font-size: 11px; font-family: 'Poppins', sans-serif;
             color: #0f172a; background: #f8fafc; outline: none; cursor: pointer;
         }
+
+        /* Filter tabs */
+        .filter-tabs { display: flex; align-items: center; gap: 5px; }
+        .filter-tab { padding: 4px 11px; border-radius: 7px; border: 1px solid #e2e8f0; background: #f8fafc; color: #64748b; font-size: 11px; font-weight: 600; font-family: 'Poppins', sans-serif; cursor: pointer; transition: all 0.2s ease; }
+        .filter-tab:hover { border-color: #94a3b8; color: #0f172a; background: #f1f5f9; }
+        .filter-tab.active { background: #1e3a8a; border-color: #1e3a8a; color: #fff; }
         .panel-footer {
             padding: 12px 20px; border-top: 1px solid #f1f5f9; background: #fafbfe;
             display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
@@ -288,7 +288,7 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
 <body>
 <div class="layout">
 
-    <!-- ══ Sidebar ══ -->
+    <!-- -- Sidebar -- -->
     <aside class="sidebar">
         <div class="sidebar-brand">
             <div class="brand-logo">
@@ -366,7 +366,7 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
         </div>
     </aside>
 
-    <!-- ══ Main ══ -->
+    <!-- -- Main -- -->
     <main class="main">
 
         <!-- Topbar -->
@@ -398,7 +398,7 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
             </div>
         </header>
 
-        <!-- ══ Content ══ -->
+        <!-- -- Content -- -->
         <div class="content">
 
             <!-- Hero -->
@@ -438,10 +438,10 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
                 </div>
             </div>
 
-            <!-- Two-column panels -->
+            <!-- Stacked panels -->
             <div class="panels-grid">
 
-                <!-- ── Users Panel ── -->
+                <!-- -- Users Panel -- -->
                 <div class="table-panel">
                     <div class="panel-header">
                         <div style="display:flex;align-items:center;gap:10px;">
@@ -455,14 +455,15 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
                             </div>
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;">
+                            <div class="filter-tabs">
+                                <button class="filter-tab active">All</button>
+                                <button class="filter-tab">Active</button>
+                                <button class="filter-tab">Inactive</button>
+                            </div>
                             <div class="search-wrap">
                                 <svg class="search-icon" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                                <input type="text" class="search-input" placeholder="Type to search…">
+                                <input type="text" class="search-input" placeholder="Type to search...">
                             </div>
-                            <button class="btn btn-ghost btn-sm">
-                                <svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>
-                                Filter
-                            </button>
                         </div>
                     </div>
 
@@ -495,7 +496,7 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
                                         
                                         $statusClass = $u['status'] === 'active' ? 'badge-green' : 'badge-red';
                                     ?>
-                                    <tr>
+                                    <tr data-status="<?= htmlspecialchars($u['status']) ?>">
                                         <td>
                                             <div style="display:flex;align-items:center;gap:9px;">
                                                 <span class="u-avatar" style="background:linear-gradient(135deg,#2563eb,#1d4ed8);">
@@ -518,11 +519,21 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
                     </div>
 
                     <div class="panel-footer">
-                        <p style="font-size:11px;color:#94a3b8;font-weight:500;"><?= count($users) ?> users</p>
+                        <div class="show-rows-wrap">
+                            <span>Show</span>
+                            <select class="show-rows-select">
+                                <option selected>10 rows</option>
+                                <option>20 rows</option>
+                                <option>50 rows</option>
+                            </select>
+                        </div>
+                        <p style="font-size:11px;color:#94a3b8;font-weight:500;">
+                            Displaying <strong id="user-count" style="color:#475569;"><?= min(10, count($users)) ?></strong> of <strong style="color:#475569;"><?= count($users) ?></strong> users
+                        </p>
                     </div>
                 </div>
 
-                <!-- ── Logs Panel ── -->
+                <!-- -- Logs Panel -- -->
                 <div class="table-panel">
                     <div class="panel-header">
                         <div style="display:flex;align-items:center;gap:10px;">
@@ -536,14 +547,15 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
                             </div>
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;">
+                            <div class="filter-tabs">
+                                <button class="filter-tab active">All</button>
+                                <button class="filter-tab">Login</button>
+                                <button class="filter-tab">Changes</button>
+                            </div>
                             <div class="search-wrap">
                                 <svg class="search-icon" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                                <input type="text" class="search-input" placeholder="Type to search…">
+                                <input type="text" class="search-input" placeholder="Type to search...">
                             </div>
-                            <button class="btn btn-ghost btn-sm">
-                                <svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>
-                                Filter
-                            </button>
                         </div>
                     </div>
 
@@ -589,8 +601,13 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
                                         if (!empty($l['affected_table']) && !empty($l['record_id'])) {
                                             $targetRef = htmlspecialchars(ucfirst($l['affected_table']) . ' ID: ' . $l['record_id']);
                                         }
+                                        $logCat = match($l['action']) {
+                                            'login', 'logout' => 'login',
+                                            'create', 'edit', 'delete', 'cancelled' => 'changes',
+                                            default => 'other',
+                                        };
                                     ?>
-                                    <tr>
+                                    <tr data-category="<?= $logCat ?>">
                                         <td>
                                             <p style="font-size:11px;font-weight:700;color:#0f172a;"><?= date('M d, Y', $logTime) ?></p>
                                             <p style="font-size:10px;color:#94a3b8;font-weight:500;"><?= date('h:i A', $logTime) ?></p>
@@ -619,13 +636,14 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
                         <div class="show-rows-wrap">
                             <span>Show</span>
                             <select class="show-rows-select">
-                                <option>10 rows</option>
-                                <option selected>50 rows</option>
+                                <option selected>10 rows</option>
+                                <option>20 rows</option>
+                                <option>50 rows</option>
                                 <option>100 rows</option>
                             </select>
                         </div>
                         <p style="font-size:11px;color:#94a3b8;font-weight:500;">
-                            Displaying <strong style="color:#475569;"><?= count($logs) ?></strong> of <strong style="color:#475569;"><?= $totalLogs ?></strong> entries
+                            Displaying <strong id="log-count" style="color:#475569;"><?= min(10, count($logs)) ?></strong> of <strong style="color:#475569;"><?= $totalLogs ?></strong> entries
                         </p>
                     </div>
                 </div>
@@ -635,7 +653,99 @@ $lapsedCount    = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status='laps
     </main>
 </div>
 <script>
+(function () {
+    const panels = document.querySelectorAll('.table-panel');
+
+    // -- Users panel (index 0) --
+    (function () {
+        const panel = panels[0];
+        if (!panel) return;
+        const tbody = panel.querySelector('tbody');
+        if (!tbody) return;
+        const allRows = Array.from(tbody.querySelectorAll('tr[data-status]'));
+        const emptyRow = tbody.querySelector('tr td[colspan]') ? tbody.querySelector('tr td[colspan]').closest('tr') : null;
+        const searchInput = panel.querySelector('.search-input');
+        const rowsSel = panel.querySelector('.show-rows-select');
+        const filterTabs = panel.querySelectorAll('.filter-tab');
+        const countEl = document.getElementById('user-count');
+        let activeFilter = 'all';
+
+        function apply() {
+            const q = searchInput ? searchInput.value.trim().toLowerCase() : '';
+            const limit = rowsSel ? (parseInt(rowsSel.value, 10) || 10) : 10;
+            let shown = 0, matched = 0;
+            allRows.forEach(function (row) {
+                const filterOk = activeFilter === 'all' || row.dataset.status === activeFilter;
+                const searchOk = !q || row.textContent.toLowerCase().includes(q);
+                const isMatch = filterOk && searchOk;
+                if (isMatch) matched++;
+                const show = isMatch && shown < limit;
+                row.style.display = show ? '' : 'none';
+                if (show) shown++;
+            });
+            if (emptyRow) emptyRow.style.display = matched === 0 ? '' : 'none';
+            if (countEl) countEl.textContent = shown;
+        }
+
+        filterTabs.forEach(function (tab) {
+            tab.addEventListener('click', function () {
+                filterTabs.forEach(function (t) { t.classList.remove('active'); });
+                tab.classList.add('active');
+                activeFilter = tab.textContent.trim().toLowerCase();
+                apply();
+            });
+        });
+
+        if (searchInput) searchInput.addEventListener('input', apply);
+        if (rowsSel) rowsSel.addEventListener('change', apply);
+        apply();
+    })();
+
+    // -- Logs panel (index 1) --
+    (function () {
+        const panel = panels[1];
+        if (!panel) return;
+        const tbody = panel.querySelector('tbody');
+        if (!tbody) return;
+        const allRows = Array.from(tbody.querySelectorAll('tr[data-category]'));
+        const emptyRow = tbody.querySelector('tr td[colspan]') ? tbody.querySelector('tr td[colspan]').closest('tr') : null;
+        const searchInput = panel.querySelector('.search-input');
+        const rowsSel = panel.querySelector('.show-rows-select');
+        const filterTabs = panel.querySelectorAll('.filter-tab');
+        const countEl = document.getElementById('log-count');
+        let activeFilter = 'all';
+
+        function apply() {
+            const q = searchInput ? searchInput.value.trim().toLowerCase() : '';
+            const limit = rowsSel ? (parseInt(rowsSel.value, 10) || 10) : 10;
+            let shown = 0, matched = 0;
+            allRows.forEach(function (row) {
+                const filterOk = activeFilter === 'all' || row.dataset.category === activeFilter;
+                const searchOk = !q || row.textContent.toLowerCase().includes(q);
+                const isMatch = filterOk && searchOk;
+                if (isMatch) matched++;
+                const show = isMatch && shown < limit;
+                row.style.display = show ? '' : 'none';
+                if (show) shown++;
+            });
+            if (emptyRow) emptyRow.style.display = matched === 0 ? '' : 'none';
+            if (countEl) countEl.textContent = shown;
+        }
+
+        filterTabs.forEach(function (tab) {
+            tab.addEventListener('click', function () {
+                filterTabs.forEach(function (t) { t.classList.remove('active'); });
+                tab.classList.add('active');
+                activeFilter = tab.textContent.trim().toLowerCase();
+                apply();
+            });
+        });
+
+        if (searchInput) searchInput.addEventListener('input', apply);
+        if (rowsSel) rowsSel.addEventListener('change', apply);
+        apply();
+    })();
+})();
 </script>
-<script src="../assets/js/table_controls.js"></script>
 </body>
 </html>

@@ -71,6 +71,18 @@ class Notification extends Database {
     }
 
     /**
+     * Mark a single notification as read.
+     */
+    public function markRead(int $userId, int $logId): void {
+        $conn = $this->connect();
+        $conn->prepare("
+            INSERT INTO notification_state (userId, logId, is_read, is_hidden)
+            VALUES (:uid, :lid, 1, 0)
+            ON DUPLICATE KEY UPDATE is_read = 1
+        ")->execute([':uid' => $userId, ':lid' => $logId]);
+    }
+
+    /**
      * Hide (dismiss) a single notification for a user.
      */
     public function dismissNotification(int $userId, int $logId): void {

@@ -16,7 +16,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($action === 'add') {
         $saroNo  = strip_tags(trim($_POST['saro_no']       ?? ''));
         $title   = strip_tags(trim($_POST['saro_title']    ?? ''));
-        $year    = strip_tags(trim($_POST['fiscal_year']   ?? ''));
         $budget  = strip_tags(trim($_POST['total_budget']  ?? ''));
         $rawCodes = json_decode($_POST['object_codes'] ?? '[]', true) ?: [];
         $codes = [];
@@ -29,12 +28,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ];
         }
         $dateRel = strip_tags(trim($_POST['date_released'] ?? '')) ?: null;
-        $validUntil = strip_tags(trim($_POST['valid_until'] ?? '')) ?: null;
-        if (!$saroNo || !$title || !$year || !$budget || !$dateRel || !$validUntil) {
+        $validUntil = $dateRel ? date('Y-12-31', strtotime($dateRel)) : null;
+        if (!$saroNo || !$title || !$budget || !$dateRel) {
             echo json_encode(['success' => false, 'error' => 'All required fields must be filled.']);
             exit;
         }
-        echo json_encode($saroObj->createSaro($userId, $saroNo, $title, $year, $budget, $codes, $dateRel, $validUntil));
+        echo json_encode($saroObj->createSaro($userId, $saroNo, $title, $budget, $codes, $dateRel, $validUntil));
         exit;
     }
 
@@ -42,12 +41,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $id     = (int)($_POST['saro_id']     ?? 0);
         $saroNo = strip_tags(trim($_POST['saro_no']      ?? ''));
         $title  = strip_tags(trim($_POST['saro_title']   ?? ''));
-        $year   = strip_tags(trim($_POST['fiscal_year']  ?? ''));
         $budget = strip_tags(trim($_POST['total_budget'] ?? ''));
         $status = strip_tags(trim($_POST['status']       ?? 'active'));
         $dateRel = strip_tags(trim($_POST['date_released'] ?? '')) ?: null;
-        $validUntil = strip_tags(trim($_POST['valid_until'] ?? '')) ?: null;
-        if (!$id || !$saroNo || !$title || !$year || !$budget || !$dateRel || !$validUntil) {
+        $validUntil = $dateRel ? date('Y-12-31', strtotime($dateRel)) : null;
+        if (!$id || !$saroNo || !$title || !$budget || !$dateRel) {
             echo json_encode(['success' => false, 'error' => 'All required fields must be filled.']);
             exit;
         }
@@ -55,7 +53,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => false, 'error' => 'You do not have permission to edit this SARO.']);
             exit;
         }
-        echo json_encode($saroObj->updateSaro($id, $saroNo, $title, $year, $budget, $status, $userId, $dateRel, $validUntil));
+        echo json_encode($saroObj->updateSaro($id, $saroNo, $title, $budget, $status, $userId, $dateRel, $validUntil));
         exit;
     }
 
@@ -109,11 +107,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     if ($action === 'grant_permission') {
         $saroId    = (int)($_POST['saro_id']    ?? 0);
-        $grantedTo = (int)($_POST['granted_to'] ?? 0);
+        $grantedToRaw = $_POST['granted_to'] ?? '[]';
+        $grantedToList = json_decode($grantedToRaw, true);
+        if (!is_array($grantedToList)) { $grantedToList = [(int)$grantedToRaw]; }
         $canEdit   = (int)($_POST['can_edit']   ?? 0);
         $canCancel = (int)($_POST['can_cancel'] ?? 0);
         $canDelete = (int)($_POST['can_delete'] ?? 0);
-        if (!$saroId || !$grantedTo) {
+        if (!$saroId || empty($grantedToList)) {
             echo json_encode(['success' => false, 'error' => 'Invalid parameters.']);
             exit;
         }
@@ -121,7 +121,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => false, 'error' => 'Only the SARO owner can grant permissions.']);
             exit;
         }
-        echo json_encode($saroObj->savePermission($saroId, $userId, $grantedTo, $canEdit, $canCancel, $canDelete));
+        $lastResult = null;
+        foreach ($grantedToList as $gTo) {
+            $gTo = (int)$gTo;
+            if ($gTo) {
+                $lastResult = $saroObj->savePermission($saroId, $userId, $gTo, $canEdit, $canCancel, $canDelete);
+                if (!$lastResult['success']) break;
+            }
+        }
+        echo json_encode($lastResult ?: ['success' => true]);
         exit;
     }
 
@@ -145,8 +153,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 }
 
 $allSaros        = $saroObj->getAllSaros();
-// Only show 'active' SAROs in data entry (excluded: cancelled, obligated, lapsed, deleted)
-$activeSaros     = array_values(array_filter($allSaros, fn($s) => $s['status'] === 'active'));
+// Show all non-cancelled, non-deleted SAROs in data entry
+$tableSaros      = array_values(array_filter($allSaros, fn($s) => !in_array($s['status'], ['cancelled', 'deleted'], true)));
 $myPermissions   = $saroObj->getMyPermissions($userId);
 $cancelledCount  = count(array_filter($allSaros, fn($s) => $s['status'] === 'cancelled'));
 $obligatedCount  = count(array_filter($allSaros, fn($s) => $s['status'] === 'obligated'));
@@ -253,7 +261,7 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
         .signout-btn:hover { background: rgba(239,68,68,0.12); color: #fca5a5; }
 
         /* ── Main ── */
-        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
         .topbar {
             height: 64px; flex-shrink: 0;
             display: flex; align-items: center; justify-content: space-between;
@@ -270,11 +278,6 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
             transition: all 0.2s ease; position: relative;
         }
         .icon-btn:hover { border-color: #3b82f6; color: #2563eb; background: #eff6ff; }
-        .notif-dot {
-            position: absolute; top: 7px; right: 7px;
-            width: 7px; height: 7px; background: #ef4444;
-            border-radius: 50%; border: 1.5px solid #fff;
-        }
         .content { flex: 1; overflow-y: auto; padding: 28px 32px; }
 
         /* Hero */
@@ -373,6 +376,16 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
             font-size: 12px; font-family: 'Poppins', sans-serif;
             color: #0f172a; background: #f8fafc; outline: none; cursor: pointer;
         }
+
+        /* Filter tabs */
+        .filter-tabs { display: flex; align-items: center; gap: 6px; }
+        .filter-tab {
+            padding: 5px 12px; border-radius: 7px; border: 1px solid #e2e8f0;
+            background: #f8fafc; color: #64748b; font-size: 11px; font-weight: 600;
+            font-family: 'Poppins', sans-serif; cursor: pointer; transition: all 0.2s ease;
+        }
+        .filter-tab:hover { border-color: #94a3b8; color: #0f172a; background: #f1f5f9; }
+        .filter-tab.active { background: #1e3a8a; border-color: #1e3a8a; color: #fff; }
 
         /* Action buttons */
         .action-btn {
@@ -564,12 +577,14 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                     <div style="display:flex;align-items:center;gap:10px;">
                         <div class="search-wrap">
                             <svg class="search-icon" width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                            <input type="text" class="search-input" placeholder="Type to search…">
+                            <input type="text" class="search-input" placeholder="Type to search...">
                         </div>
-                        <button class="btn btn-ghost btn-sm">
-                            <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>
-                            Filter
-                        </button>
+                        <div class="filter-tabs">
+                            <button class="filter-tab active">All</button>
+                            <button class="filter-tab">Active</button>
+                            <button class="filter-tab">Obligated</button>
+                            <button class="filter-tab">Lapsed</button>
+                        </div>
                         <button class="btn btn-primary btn-sm" onclick="openAddSaroModal()">
                             <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                             Add SARO
@@ -593,18 +608,18 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                             </tr>
                         </thead>
                         <tbody>
-                            <?php if (empty($activeSaros)): ?>
+                            <?php if (empty($tableSaros)): ?>
                             <tr>
-                                <td colspan="7" style="text-align:center;padding:52px 20px;color:#94a3b8;">
+                                <td colspan="8" style="text-align:center;padding:52px 20px;color:#94a3b8;">
                                     <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
                                         <svg width="40" height="40" fill="none" stroke="#cbd5e1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                                        <p style="font-size:13px;font-weight:600;color:#94a3b8;">No active SARO records</p>
+                                        <p style="font-size:13px;font-weight:600;color:#94a3b8;">No SARO records</p>
                                         <p style="font-size:12px;color:#cbd5e1;">Click <strong>Add SARO</strong> to create the first entry.</p>
                                     </div>
                                 </td>
                             </tr>
                             <?php else: ?>
-                            <?php foreach ($activeSaros as $i => $s):
+                            <?php foreach ($tableSaros as $i => $s):
                                 $rowNum      = str_pad($i + 1, 2, '0', STR_PAD_LEFT);
                                 $saroNoEsc   = htmlspecialchars($s['saroNo'], ENT_QUOTES);
                                 $titleEsc    = htmlspecialchars($s['saro_title']);
@@ -617,7 +632,7 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                                 $canCancel   = $isOwner || $perm && (int)$perm['can_cancel'] === 1;
                                 $canDelete   = $isOwner || $perm && (int)$perm['can_delete'] === 1;
                             ?>
-                            <tr>
+                            <tr data-status="<?= htmlspecialchars($s['status']) ?>">
                                 <td style="color:#cbd5e1;font-weight:700;font-size:12px;"><?= $rowNum ?></td>
                                 <td>
                                     <span style="font-weight:800;color:#0f172a;font-size:13px;letter-spacing:-0.01em;"><?= $saroNoEsc ?></span>
@@ -631,7 +646,7 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                                     <p style="font-weight:500;color:#334155;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= $titleEsc ?></p>
                                 </td>
                                 <td style="text-align:right;">
-                                    <span style="font-weight:800;color:#0f172a;font-size:13px;letter-spacing:-0.01em;">₱<?= $budgetFmt ?></span>
+                                    <span style="font-weight:800;color:#0f172a;font-size:13px;letter-spacing:-0.01em;">&#8369;<?= $budgetFmt ?></span>
                                 </td>
                                 <td style="text-align:center;">
                                     <span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:#1d4ed8;background:#dbeafe;padding:3px 10px;border-radius:99px;">
@@ -642,7 +657,15 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                                     <span style="font-size:11px;font-weight:600;color:#64748b;"><?= $validUntilFmt ?></span>
                                 </td>
                                 <td style="text-align:center;">
-                                    <span class="badge badge-green"><span class="badge-dot"></span>Active</span>
+                                    <?php
+                                    $badgeClass = match($s['status']) {
+                                        'active'    => 'badge-blue',
+                                        'obligated' => 'badge-green',
+                                        'lapsed'    => 'badge-red',
+                                        default     => 'badge-amber',
+                                    };
+                                    ?>
+                                    <span class="badge <?= $badgeClass ?>"><span class="badge-dot"></span><?= ucfirst(htmlspecialchars($s['status'])) ?></span>
                                 </td>
                                 <td style="text-align:center;">
                                     <div style="display:flex;align-items:center;justify-content:center;gap:4px;">
@@ -654,7 +677,6 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                                             data-id="<?= $s['saroId'] ?>"
                                             data-no="<?= $saroNoEsc ?>"
                                             data-title="<?= htmlspecialchars($s['saro_title'], ENT_QUOTES) ?>"
-                                            data-year="<?= $s['fiscal_year'] ?>"
                                             data-budget="<?= $s['total_budget'] ?>"
                                             data-status="<?= $s['status'] ?>"
                                             data-released="<?= $s['date_released'] ?? '' ?>"
@@ -699,13 +721,14 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                     <div class="show-rows-wrap">
                         <span>Show</span>
                         <select class="show-rows-select">
-                            <option>10 rows</option>
-                            <option selected>20 rows</option>
+                            <option selected>10 rows</option>
+                            <option>20 rows</option>
+                            <option>30 rows</option>
                             <option>50 rows</option>
                         </select>
                     </div>
                     <p style="font-size:11px;color:#94a3b8;font-weight:500;">
-                        Displaying <strong style="color:#475569;"><?= count($activeSaros) ?></strong> of <strong style="color:#475569;"><?= count($activeSaros) ?></strong> active SARO entries
+                        Displaying <strong id="row-count" style="color:#475569;"><?= min(10, count($tableSaros)) ?></strong> of <strong style="color:#475569;"><?= count($tableSaros) ?></strong> SARO entries
                     </p>
                 </div>
 
@@ -752,33 +775,22 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
 
             <div>
                 <label class="form-label">SARO Title <span style="color:#dc2626;">*</span></label>
-                <input type="text" class="form-input" id="add-saro-title" placeholder="e.g. ICT Equipment Procurement…">
+                <input type="text" class="form-input" id="add-saro-title" placeholder="e.g. ICT Equipment Procurement...">
                 <p class="saro-err-msg" id="err-add-saro-title" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">SARO title is required!</p>
             </div>
 
-            <div>
-                <label class="form-label">Fiscal Year <span style="color:#dc2626;">*</span></label>
-                <input type="number" class="form-input" id="add-fiscal-year" placeholder="e.g. 2026" min="2020" max="2099">
-                <p class="saro-err-msg" id="err-add-fiscal-year" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Fiscal year is required!</p>
-            </div>
 
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div>
+                    <label class="form-label">Total Budget (&#8369;) <span style="color:#dc2626;">*</span></label>
+                    <input type="number" class="form-input" id="add-total-budget" placeholder="0.00" min="0" step="0.01">
+                    <p class="saro-err-msg" id="err-add-total-budget" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Total budget is required!</p>
+                </div>
                 <div>
                     <label class="form-label">Date Released <span style="color:#dc2626;">*</span></label>
                     <input type="date" class="form-input" id="add-date-released">
                     <p class="saro-err-msg" id="err-add-date-released" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Date released is required!</p>
                 </div>
-                <div>
-                    <label class="form-label">Valid Until <span style="color:#dc2626;">*</span></label>
-                    <input type="date" class="form-input" id="add-valid-until">
-                    <p class="saro-err-msg" id="err-add-valid-until" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Valid until is required!</p>
-                </div>
-            </div>
-
-            <div>
-                <label class="form-label">Total Budget (₱) <span style="color:#dc2626;">*</span></label>
-                <input type="number" class="form-input" id="add-total-budget" placeholder="0.00" min="0" step="0.01">
-                <p class="saro-err-msg" id="err-add-total-budget" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Total budget is required!</p>
             </div>
 
             <!-- Object Codes -->
@@ -864,26 +876,16 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                 <input type="text" class="form-input" id="edit-saro-title">
                 <p class="saro-err-msg" id="err-edit-saro-title" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">SARO title is required!</p>
             </div>
-            <div>
-                <label class="form-label">Fiscal Year <span style="color:#dc2626;">*</span></label>
-                <input type="number" class="form-input" id="edit-fiscal-year" min="2020" max="2099">
-                <p class="saro-err-msg" id="err-edit-fiscal-year" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Fiscal year is required!</p>
-            </div>
-            <div>
-                <label class="form-label">Total Budget (₱) <span style="color:#dc2626;">*</span></label>
-                <input type="number" class="form-input" id="edit-total-budget" min="0" step="0.01">
-                <p class="saro-err-msg" id="err-edit-total-budget" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Total budget is required!</p>
-            </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div>
+                    <label class="form-label">Total Budget (&#8369;) <span style="color:#dc2626;">*</span></label>
+                    <input type="number" class="form-input" id="edit-total-budget" min="0" step="0.01">
+                    <p class="saro-err-msg" id="err-edit-total-budget" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Total budget is required!</p>
+                </div>
                 <div>
                     <label class="form-label">Date Released <span style="color:#dc2626;">*</span></label>
                     <input type="date" class="form-input" id="edit-date-released">
                     <p class="saro-err-msg" id="err-edit-date-released" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Date released is required!</p>
-                </div>
-                <div>
-                    <label class="form-label">Valid Until <span style="color:#dc2626;">*</span></label>
-                    <input type="date" class="form-input" id="edit-valid-until">
-                    <p class="saro-err-msg" id="err-edit-valid-until" style="font-size:10px; color:#ef4444; margin-top:2px; font-weight:500; display:none;">Valid until is required!</p>
                 </div>
             </div>
             <div>
@@ -1004,7 +1006,7 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
 
         <!-- Body (rendered by JS) -->
         <div id="manage-access-body" style="padding:24px 28px;max-height:72vh;overflow-y:auto;">
-            <div style="text-align:center;padding:32px;color:#94a3b8;font-size:13px;">Loading…</div>
+            <div style="text-align:center;padding:32px;color:#94a3b8;font-size:13px;">Loading...</div>
         </div>
 
         <!-- Footer -->
@@ -1033,11 +1035,9 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
             document.getElementById('edit-saro-id').value          = btn.dataset.id;
             document.getElementById('edit-saro-no').value          = btn.dataset.no;
             document.getElementById('edit-saro-title').value       = btn.dataset.title;
-            document.getElementById('edit-fiscal-year').value      = btn.dataset.year;
             document.getElementById('edit-total-budget').value     = btn.dataset.budget;
             document.getElementById('edit-status').value           = btn.dataset.status;
             document.getElementById('edit-date-released').value    = btn.dataset.released || '';
-            document.getElementById('edit-valid-until').value      = btn.dataset.valid    || '';
             document.getElementById('editSaroModal').style.display = 'flex';
         };
     });
@@ -1096,7 +1096,7 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
 
     function submitAddSaro() {
         let valid = true;
-        ['add-saro-no', 'add-saro-title', 'add-fiscal-year', 'add-total-budget', 'add-date-released', 'add-valid-until'].forEach(id => {
+        ['add-saro-no', 'add-saro-title', 'add-total-budget', 'add-date-released'].forEach(id => {
             const el = document.getElementById(id);
             const errEl = document.getElementById('err-' + id);
             if (!el.value.trim()) {
@@ -1111,10 +1111,8 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
 
         const saroNo = document.getElementById('add-saro-no').value.trim();
         const title = document.getElementById('add-saro-title').value.trim();
-        const year = document.getElementById('add-fiscal-year').value.trim();
         const budget = document.getElementById('add-total-budget').value;
         const released = document.getElementById('add-date-released').value;
-        const validUntil = document.getElementById('add-valid-until').value;
 
         const codes = [];
         let validCodes = true;
@@ -1157,10 +1155,8 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
         fd.append('action',         'add');
         fd.append('saro_no',        saroNo.replace(/<\/?[^>]+(>|$)/g, ""));
         fd.append('saro_title',     title.replace(/<\/?[^>]+(>|$)/g, ""));
-        fd.append('fiscal_year',    year.replace(/<\/?[^>]+(>|$)/g, ""));
         fd.append('total_budget',   budget);
         fd.append('date_released',  released);
-        fd.append('valid_until',    validUntil);
         fd.append('object_codes',   JSON.stringify(codes));
         fetch('data_entry.php', { method: 'POST', body: fd })
             .then(r => r.json())
@@ -1169,7 +1165,7 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
 
     function submitEditSaro() {
         let valid = true;
-        ['edit-saro-no', 'edit-saro-title', 'edit-fiscal-year', 'edit-total-budget', 'edit-date-released', 'edit-valid-until'].forEach(id => {
+        ['edit-saro-no', 'edit-saro-title', 'edit-total-budget', 'edit-date-released'].forEach(id => {
             const el = document.getElementById(id);
             const errEl = document.getElementById('err-' + id);
             if (!el.value.trim()) {
@@ -1187,21 +1183,17 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
         const id = document.getElementById('edit-saro-id').value;
         const saroNo = document.getElementById('edit-saro-no').value.trim();
         const title = document.getElementById('edit-saro-title').value.trim();
-        const year = document.getElementById('edit-fiscal-year').value.trim();
         const budget = document.getElementById('edit-total-budget').value;
         const released = document.getElementById('edit-date-released').value;
-        const validUntil = document.getElementById('edit-valid-until').value;
 
         const fd = new FormData();
         fd.append('action',         'edit');
         fd.append('saro_id',        id);
         fd.append('saro_no',        saroNo.replace(/<\/?[^>]+(>|$)/g, ""));
         fd.append('saro_title',     title.replace(/<\/?[^>]+(>|$)/g, ""));
-        fd.append('fiscal_year',    year.replace(/<\/?[^>]+(>|$)/g, ""));
         fd.append('total_budget',   budget);
         fd.append('status',         document.getElementById('edit-status').value);
         fd.append('date_released',  released);
-        fd.append('valid_until',    validUntil);
         fetch('data_entry.php', { method: 'POST', body: fd })
             .then(r => r.json())
             .then(res => { if (res.success) location.reload(); else alert(res.error || 'Error updating SARO.'); });
@@ -1291,7 +1283,7 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
 
     function loadManageAccess(saroId) {
         const body = document.getElementById('manage-access-body');
-        body.innerHTML = '<div style="text-align:center;padding:32px;color:#94a3b8;font-size:13px;">Loading…</div>';
+        body.innerHTML = '<div style="text-align:center;padding:32px;color:#94a3b8;font-size:13px;">Loading...</div>';
         const fd = new FormData();
         fd.append('action',  'get_permissions');
         fd.append('saro_id', saroId);
@@ -1316,16 +1308,23 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
             html += '<p style="font-size:12px;color:#94a3b8;font-style:italic;margin-bottom:20px;">All other admins already have access, or no other admins exist.</p>';
         } else {
             html += '<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">';
-            html += '<select id="grant-admin-select" style="width:100%;padding:9px 14px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;font-family:\'Poppins\',sans-serif;font-weight:500;color:#0f172a;background:#f8fafc;outline:none;">';
-            html += '<option value="">Select admin to grant access…</option>';
+            html += '<input type="text" id="grant-admin-search" placeholder="Search users..." oninput="filterGrantAdmins()" style="width:100%;padding:9px 14px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;font-family:\'Poppins\',sans-serif;margin-bottom:8px;outline:none;background:#f8fafc;color:#0f172a;">';
+            html += '<div id="grant-admin-list" style="max-height:160px;overflow-y:auto;border:1.5px solid #e2e8f0;border-radius:9px;padding:8px;background:#f8fafc;display:flex;flex-direction:column;gap:4px;">';
             others.forEach(u => {
-                html += `<option value="${u.userId}">${u.full_name}</option>`;
+                html += `<label class="grant-admin-item" style="display:flex;align-items:center;gap:10px;font-size:13px;font-weight:500;color:#0f172a;cursor:pointer;padding:6px 8px;border-radius:6px;transition:background 0.2s;" onmouseover="this.style.background='#eff6ff'" onmouseout="this.style.background='transparent'">
+                            <input type="checkbox" class="grant-admin-checkbox" value="${u.userId}" style="width:14px;height:14px;accent-color:#7c3aed;cursor:pointer;">
+                            <span class="grant-admin-name">${u.full_name}</span>
+                         </label>`;
             });
-            html += '</select>';
-            html += '<div style="display:flex;gap:20px;">';
+            html += '</div>';
+            html += '<div style="display:flex;gap:20px;margin-top:10px;">';
+            html += `<label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:#1e40af;cursor:pointer;">
+                <input type="checkbox" id="grant-can-all" onchange="document.getElementById('grant-can-edit').checked=this.checked;document.getElementById('grant-can-cancel').checked=this.checked;document.getElementById('grant-can-delete').checked=this.checked;" style="width:14px;height:14px;accent-color:#1e40af;cursor:pointer;">
+                Check All
+            </label>`;
             [['edit','Edit'],['cancel','Cancel'],['delete','Delete']].forEach(([key, label]) => {
                 html += `<label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#475569;cursor:pointer;">
-                    <input type="checkbox" id="grant-can-${key}" style="width:14px;height:14px;accent-color:#7c3aed;cursor:pointer;">
+                    <input type="checkbox" id="grant-can-${key}" style="width:14px;height:14px;accent-color:#7c3aed;cursor:pointer;" onchange="if(!this.checked) document.getElementById('grant-can-all').checked = false; else if (document.getElementById('grant-can-edit').checked && document.getElementById('grant-can-cancel').checked && document.getElementById('grant-can-delete').checked) document.getElementById('grant-can-all').checked = true;">
                     Can ${label}
                 </label>`;
             });
@@ -1384,17 +1383,26 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
         return `<span style="padding:2px 8px;border-radius:99px;font-size:9px;font-weight:700;${s}">${label}</span>`;
     }
 
+    function filterGrantAdmins() {
+        const q = document.getElementById('grant-admin-search').value.toLowerCase();
+        document.querySelectorAll('.grant-admin-item').forEach(item => {
+            const name = item.querySelector('.grant-admin-name').textContent.toLowerCase();
+            item.style.display = name.includes(q) ? 'flex' : 'none';
+        });
+    }
+
     function submitGrantPermission(saroId) {
-        const grantedTo = document.getElementById('grant-admin-select').value;
+        const checkboxes = document.querySelectorAll('.grant-admin-checkbox:checked');
+        const grantedToList = Array.from(checkboxes).map(cb => cb.value);
         const canEdit   = document.getElementById('grant-can-edit').checked   ? 1 : 0;
         const canCancel = document.getElementById('grant-can-cancel').checked ? 1 : 0;
         const canDelete = document.getElementById('grant-can-delete').checked ? 1 : 0;
-        if (!grantedTo) { alert('Please select an admin.'); return; }
+        if (grantedToList.length === 0) { alert('Please select at least one admin.'); return; }
         if (!canEdit && !canCancel && !canDelete) { alert('Please select at least one permission.'); return; }
         const fd = new FormData();
         fd.append('action',     'grant_permission');
         fd.append('saro_id',    saroId);
-        fd.append('granted_to', grantedTo);
+        fd.append('granted_to', JSON.stringify(grantedToList));
         fd.append('can_edit',   canEdit);
         fd.append('can_cancel', canCancel);
         fd.append('can_delete', canDelete);
@@ -1439,6 +1447,50 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
         }
     });
 </script>
-<script src="../assets/js/table_controls.js"></script>
+<script>
+(function () {
+    const panel = document.querySelector('.table-panel');
+    if (!panel) return;
+    const tbody = panel.querySelector('tbody');
+    if (!tbody) return;
+    const allRows = Array.from(tbody.querySelectorAll('tr[data-status]'));
+    const emptyRow = tbody.querySelector('tr td[colspan]') ? tbody.querySelector('tr td[colspan]').closest('tr') : null;
+    const searchInput = panel.querySelector('.search-input');
+    const rowsSel = panel.querySelector('.show-rows-select');
+    const filterTabs = panel.querySelectorAll('.filter-tab');
+    const countEl = document.getElementById('row-count');
+    let activeStatus = 'all';
+
+    function applyFilters() {
+        const q = searchInput ? searchInput.value.trim().toLowerCase() : '';
+        const limit = rowsSel ? (parseInt(rowsSel.value, 10) || 10) : 10;
+        let shown = 0, matched = 0;
+        allRows.forEach(function (row) {
+            const statusOk = activeStatus === 'all' || row.dataset.status === activeStatus;
+            const searchOk = !q || row.textContent.toLowerCase().includes(q);
+            const isMatch = statusOk && searchOk;
+            if (isMatch) matched++;
+            const show = isMatch && shown < limit;
+            row.style.display = show ? '' : 'none';
+            if (show) shown++;
+        });
+        if (emptyRow) emptyRow.style.display = matched === 0 ? '' : 'none';
+        if (countEl) countEl.textContent = shown;
+    }
+
+    filterTabs.forEach(function (tab) {
+        tab.addEventListener('click', function () {
+            filterTabs.forEach(function (t) { t.classList.remove('active'); });
+            tab.classList.add('active');
+            activeStatus = tab.textContent.trim().toLowerCase();
+            applyFilters();
+        });
+    });
+
+    if (searchInput) searchInput.addEventListener('input', applyFilters);
+    if (rowsSel) rowsSel.addEventListener('change', applyFilters);
+    applyFilters();
+})();
+</script>
 </body>
 </html>

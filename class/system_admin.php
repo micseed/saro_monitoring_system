@@ -1,7 +1,7 @@
 <?php
-// classes/SuperAdmin.php
+// classes/SystemAdmin.php
 
-class SuperAdmin {
+class SystemAdmin {
     private $pdo;
 
     public function __construct($pdo) {
@@ -10,13 +10,13 @@ class SuperAdmin {
 
     // Fetch all top-level stats for the hero and cards
     public function getDashboardStats() {
-        $stmtUser = $this->pdo->query("SELECT COUNT(*) as total, SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active FROM user");
+        $stmtUser = $this->pdo->query("SELECT COUNT(*) as total, SUM(CASE WHEN u.status = 'active' THEN 1 ELSE 0 END) as active FROM user u LEFT JOIN user_role ur ON u.roleId = ur.roleId WHERE LOWER(ur.role) NOT LIKE '%system%' OR ur.role IS NULL");
         $users = $stmtUser->fetch(PDO::FETCH_ASSOC);
 
         $stmtReq = $this->pdo->query("SELECT COUNT(*) as pending FROM password_requests WHERE status = 'pending'");
         $requests = $stmtReq->fetch(PDO::FETCH_ASSOC);
 
-        $stmtSaro = $this->pdo->query("SELECT COUNT(*) as total, COALESCE(SUM(total_budget),0) as total_budget FROM saro WHERE status IN ('active','obligated')");
+        $stmtSaro = $this->pdo->query("SELECT COUNT(*) as total, COALESCE(SUM(total_budget),0) as total_budget FROM saro WHERE status IN ('active','obligated') AND YEAR(date_released) = YEAR(CURDATE())");
         $saros = $stmtSaro->fetch(PDO::FETCH_ASSOC);
 
         $stmtProc = $this->pdo->query("
@@ -26,6 +26,7 @@ class SuperAdmin {
             JOIN saro s ON s.saroId = o.saroId
             WHERE p.status = 'obligated'
               AND s.status IN ('active','obligated')
+              AND YEAR(s.date_released) = YEAR(CURDATE())
         ");
         $procurements = $stmtProc->fetch(PDO::FETCH_ASSOC);
 
@@ -49,6 +50,7 @@ class SuperAdmin {
         $sql = "SELECT u.first_name, u.last_name, u.email, u.status, r.role
                 FROM user u
                 LEFT JOIN user_role r ON u.roleId = r.roleId
+                WHERE LOWER(r.role) NOT LIKE '%system%' OR r.role IS NULL
                 ORDER BY u.created_at DESC LIMIT :limit";
         $stmt = $this->pdo->prepare($sql);
         $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
@@ -77,6 +79,7 @@ class SuperAdmin {
             LEFT JOIN object_code oc ON oc.saroId = s.saroId
             LEFT JOIN procurement p  ON p.objectId = oc.objectId
             WHERE s.status IN ('active','obligated')
+              AND YEAR(s.date_released) = YEAR(CURDATE())
             GROUP BY s.saroId, s.saroNo, s.total_budget
             ORDER BY s.created_at ASC
             LIMIT :limit

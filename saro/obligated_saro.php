@@ -1,10 +1,19 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../class/saro.php';
 require_once __DIR__ . '/../class/notification.php';
 $saroObj = new Saro();
 $userId  = (int)$_SESSION['user_id'];
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['saro_id'])) {
+    if ($_POST['action'] === 'delete') {
+        $saroObj->deleteSaro((int)$_POST['saro_id'], $userId);
+        echo json_encode(['success' => true]);
+        exit;
+    }
+}
 $saroObj->checkAndAutoUpdateStatus($userId);
+
 $allSaros        = $saroObj->getAllSaros();
 $obligatedSaros  = array_values(array_filter($allSaros, fn($s) => $s['status'] === 'obligated'));
 $cancelledCount  = count(array_filter($allSaros, fn($s) => $s['status'] === 'cancelled'));
@@ -44,7 +53,7 @@ html, body { height: 100%; overflow: hidden; background: #f0f4ff; }
 .user-avatar { width: 34px; height: 34px; border-radius: 8px; background: linear-gradient(135deg,#2563eb,#1d4ed8); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: #fff; }
 .signout-btn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border-radius: 10px; font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.4); background: none; border: none; cursor: pointer; text-decoration: none; transition: all 0.2s ease; }
 .signout-btn:hover { background: rgba(239,68,68,0.12); color: #fca5a5; }
-.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
 .topbar { height: 64px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; background: #fff; border-bottom: 1px solid #e8edf5; }
 .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #64748b; }
 .breadcrumb-active { color: #0f172a; }
@@ -67,6 +76,17 @@ tbody td { padding: 14px 20px; font-size: 13px; color: #475569; }
 .search-wrap { position: relative; }
 .search-input { padding: 8px 12px 8px 36px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; font-size: 12px; font-family: 'Poppins',sans-serif; width: 220px; outline: none; }
 .search-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: #94a3b8; pointer-events: none; }
+.show-rows-wrap { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #94a3b8; font-weight: 500; }
+.show-rows-select { padding: 5px 8px; border: 1px solid #e2e8f0; border-radius: 7px; background: #f8fafc; font-size: 11px; font-family: 'Poppins',sans-serif; color: #475569; outline: none; cursor: pointer; }
+
+.action-btn {
+    width: 30px; height: 30px; border-radius: 7px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid transparent; cursor: pointer;
+    background: transparent; transition: all 0.2s ease;
+}
+.action-btn-del { color: #94a3b8; }
+.action-btn-del:hover { background: #fee2e2; border-color: #fecaca; color: #dc2626; }
 </style>
 </head><body>
 <div class="layout">
@@ -139,7 +159,7 @@ tbody td { padding: 14px 20px; font-size: 13px; color: #475569; }
         </div>
         <div class="search-wrap">
           <svg class="search-icon" width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-          <input type="text" class="search-input" id="obligSearch" placeholder="Search obligated SAROs…" oninput="filterRows(this.value)">
+          <input type="text" class="search-input" id="obligSearch" placeholder="Search obligated SAROs...">
         </div>
       </div>
       <div style="overflow-x:auto;">
@@ -148,10 +168,11 @@ tbody td { padding: 14px 20px; font-size: 13px; color: #475569; }
             <th style="width:52px;">No.</th><th>SARO No.</th><th>SARO Title</th>
             <th style="text-align:right;">Total Budget</th><th style="text-align:center;">Object Codes</th>
             <th style="text-align:center;">Valid Until</th><th style="text-align:center;">Created By</th><th style="text-align:center;">Status</th>
+                                <th style="text-align:center;">Actions</th>
           </tr></thead>
           <tbody id="obligTbody">
             <?php if (empty($obligatedSaros)): ?>
-            <tr><td colspan="8" style="text-align:center;padding:52px 20px;color:#94a3b8;">
+            <tr><td colspan="9" style="text-align:center;padding:52px 20px;color:#94a3b8;">
               <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
                 <svg width="40" height="40" fill="none" stroke="#cbd5e1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 <p style="font-size:13px;font-weight:600;color:#94a3b8;">No obligated SAROs yet</p>
@@ -159,37 +180,114 @@ tbody td { padding: 14px 20px; font-size: 13px; color: #475569; }
             </td></tr>
             <?php else: foreach ($obligatedSaros as $i => $s):
               $rowNum = str_pad($i+1,2,'0',STR_PAD_LEFT);
+              $isOwner = (int)$s['userId'] === $userId;
               $validFmt = $s['valid_until'] ? date('M d, Y', strtotime($s['valid_until'])) : '—';
             ?>
             <tr class="oblig-row">
               <td style="color:#cbd5e1;font-weight:700;font-size:12px;"><?= $rowNum ?></td>
               <td><span style="font-weight:800;color:#0f172a;font-size:13px;"><?= htmlspecialchars($s['saroNo']) ?></span></td>
               <td style="max-width:260px;"><p style="font-weight:500;color:#334155;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= htmlspecialchars($s['saro_title']) ?></p></td>
-              <td style="text-align:right;"><span style="font-weight:800;color:#0f172a;font-size:13px;">₱<?= number_format((float)$s['total_budget'],2) ?></span></td>
+              <td style="text-align:right;"><span style="font-weight:800;color:#0f172a;font-size:13px;">&#8369;<?= number_format((float)$s['total_budget'],2) ?></span></td>
               <td style="text-align:center;"><span style="font-size:11px;font-weight:700;color:#16a34a;background:#dcfce7;padding:3px 10px;border-radius:99px;"><?= (int)$s['obj_count'] ?> <?= (int)$s['obj_count'] === 1 ? 'code' : 'codes' ?></span></td>
               <td style="text-align:center;"><span style="font-size:11px;font-weight:600;color:#64748b;"><?= $validFmt ?></span></td>
               <td style="text-align:center;"><span style="font-size:11px;color:#64748b;"><?= htmlspecialchars($s['owner_name'] ?? '—') ?></span></td>
               <td style="text-align:center;"><span class="badge badge-green"><span class="badge-dot"></span>Obligated</span></td>
+                                <td style="text-align:center;">
+                                    <?php if ($isOwner): ?>
+                                    <div style="display:flex;align-items:center;justify-content:center;gap:6px;">
+                                        <button class="action-btn action-btn-del" data-id="<?= $s['saroId'] ?>" data-no="<?= htmlspecialchars($s['saroNo'], ENT_QUOTES) ?>" title="Delete SARO"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
+                                    </div>
+                                    <?php else: ?>
+                                    <span style="font-size:10px;font-weight:600;color:#94a3b8;background:#f8fafc;padding:4px 8px;border-radius:6px;border:1px dashed #cbd5e1;white-space:nowrap;" title="Only the owner can control this SARO">Owner Only</span>
+                                    <?php endif; ?>
+                                </td>
             </tr>
             <?php endforeach; endif; ?>
           </tbody>
         </table>
       </div>
       <div class="panel-footer">
-        <div></div>
-        <p style="font-size:11px;color:#94a3b8;font-weight:500;"><strong style="color:#475569;"><?= $obligatedCount ?></strong> obligated SARO <?= $obligatedCount === 1 ? 'entry' : 'entries' ?></p>
+        <div class="show-rows-wrap">
+          Show
+          <select class="show-rows-select" id="obligRows">
+            <option value="10" selected>10</option>
+            <option value="20">20</option>
+            <option value="30">30</option>
+            <option value="50">50</option>
+          </select>
+          rows
+        </div>
+        <p style="font-size:11px;color:#94a3b8;font-weight:500;">Displaying <strong id="row-count" style="color:#475569;"><?= $obligatedCount ?></strong> of <strong style="color:#475569;"><?= $obligatedCount ?></strong> obligated SARO <?= $obligatedCount === 1 ? 'entry' : 'entries' ?></p>
       </div>
     </div>
   </div>
 </main>
 </div>
 <script>
-function filterRows(q) {
-    q = q.toLowerCase();
-    document.querySelectorAll('#obligTbody .oblig-row').forEach(r => {
-        r.style.display = r.textContent.toLowerCase().includes(q) ? '' : 'none';
-    });
-}
+(function () {
+    const allRows  = Array.from(document.querySelectorAll('#obligTbody .oblig-row'));
+    const searchEl = document.getElementById('obligSearch');
+    const rowsSel  = document.getElementById('obligRows');
+    const countEl  = document.getElementById('row-count');
+    function apply() {
+        const q     = searchEl ? searchEl.value.trim().toLowerCase() : '';
+        const limit = rowsSel ? (parseInt(rowsSel.value, 10) || 10) : 10;
+        let shown = 0;
+        allRows.forEach(function (row) {
+            const isMatch = !q || row.textContent.toLowerCase().includes(q);
+            const show    = isMatch && shown < limit;
+            row.style.display = show ? '' : 'none';
+            if (show) shown++;
+        });
+        if (countEl) countEl.textContent = shown;
+    }
+    if (searchEl) searchEl.addEventListener('input', apply);
+    if (rowsSel)  rowsSel.addEventListener('change', apply);
+    apply();
+})();
 </script>
-<script src="../assets/js/table_controls.js"></script>
+
+<!-- Delete Modal -->
+<div id="deleteModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,23,42,0.4);z-index:999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+    <div style="background:#fff;border-radius:20px;width:100%;max-width:380px;box-shadow:0 20px 25px -5px rgba(0,0,0,0.1),0 8px 10px -6px rgba(0,0,0,0.1);overflow:hidden;animation:modalIn 0.2s ease-out;">
+        <div style="padding:28px 28px 20px;">
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px;">
+                <div style="width:42px;height:42px;border-radius:12px;background:#fef2f2;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                    <svg width="20" height="20" fill="none" stroke="#dc2626" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                </div>
+                <div>
+                    <h3 style="font-size:16px;font-weight:800;color:#0f172a;letter-spacing:-0.01em;">Delete SARO</h3>
+                    <p style="font-size:12px;color:#94a3b8;font-weight:500;">This action cannot be undone</p>
+                </div>
+            </div>
+            <p style="font-size:13px;color:#475569;line-height:1.5;margin-bottom:6px;">Are you sure you want to permanently delete SARO <strong style="color:#0f172a;" id="delete-saro-label"></strong>?</p>
+            <input type="hidden" id="delete-saro-id">
+        </div>
+        <div style="padding:16px 28px;border-top:1px solid #f1f5f9;background:#fafbfe;display:flex;align-items:center;justify-content:flex-end;gap:10px;">
+            <button class="btn btn-ghost" onclick="document.getElementById('deleteModal').style.display='none'" style="padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;color:#64748b;border:none;background:none;cursor:pointer;">Cancel</button>
+            <button id="confirmDeleteBtn" style="padding:8px 16px;border-radius:8px;font-size:12px;font-weight:700;color:#fff;background:#dc2626;border:none;cursor:pointer;display:flex;align-items:center;gap:6px;">Delete</button>
+        </div>
+    </div>
+</div>
+<style>@keyframes modalIn { from { opacity: 0; transform: scale(0.95) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }</style>
+
+<script>
+    document.querySelectorAll('.action-btn-del').forEach(btn => {
+        btn.onclick = () => {
+            document.getElementById('delete-saro-id').value = btn.dataset.id;
+            document.getElementById('delete-saro-label').textContent = btn.dataset.no;
+            document.getElementById('deleteModal').style.display = 'flex';
+        };
+    });
+    
+    document.getElementById('confirmDeleteBtn').onclick = () => {
+        const fd = new FormData();
+        fd.append('action', 'delete');
+        fd.append('saro_id', document.getElementById('delete-saro-id').value);
+        fetch('obligated_saro.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(res => { if(res.success) location.reload(); else alert('Error deleting SARO'); });
+    };
+</script>
+
 </body></html>

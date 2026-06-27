@@ -96,35 +96,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <link href="dist/output.css" rel="stylesheet">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,700;1,800;1,900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        * { font-family: 'Poppins', ui-sans-serif, system-ui, sans-serif; box-sizing: border-box; margin: 0; padding: 0; }
+        * { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; box-sizing: border-box; margin: 0; padding: 0; }
+        h1, h2, h3, h4, h5, h6, .brand-font { font-family: 'Outfit', sans-serif; }
         html, body { height: 100%; }
 
         body {
             display: flex;
+            flex-direction: row-reverse;
             min-height: 100vh;
+            background: #ffffff;
         }
+
+        /* Animations */
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        .fade-up { opacity: 0; animation: fadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .delay-100 { animation-delay: 0.1s; }
+        .delay-200 { animation-delay: 0.2s; }
+        .delay-300 { animation-delay: 0.3s; }
+        .delay-400 { animation-delay: 0.4s; }
 
         /* ── Left panel (form) ── */
         .left-panel {
             width: 50%;
             display: flex;
             flex-direction: column;
-            background: #fff;
+            background: #ffffff;
             position: relative;
-            padding: 40px 64px;
+            padding: 24px 64px;
             overflow-y: auto;
+            scrollbar-width: none; /* Firefox */
+        }
+        .left-panel::-webkit-scrollbar {
+            display: none; /* Chrome/Safari/Edge */
         }
 
         /* ── Right panel (image) ── */
         .right-panel {
             width: 50%;
             position: relative;
-            background-image: url('assets/dict_bg.jpg');
-            background-size: cover;
-            background-position: center;
-            background-repeat: no-repeat;
+            background: url('assets/dict_bg.jpg') center/cover no-repeat;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -133,47 +152,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .right-overlay {
             position: absolute;
             inset: 0;
-            background: linear-gradient(145deg, rgba(8,18,52,0.92) 0%, rgba(29,78,216,0.80) 100%);
-        }
-        .right-card {
-            position: relative;
-            z-index: 1;
-            background: rgba(255,255,255,0.07);
-            border: 1px solid rgba(255,255,255,0.15);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border-radius: 20px;
-            padding: 48px 40px;
-            max-width: 440px;
-            width: 100%;
+            background: linear-gradient(135deg, rgba(8,18,52,0.9) 0%, rgba(14,40,100,0.8) 100%);
         }
 
         /* ── Form elements ── */
         .form-label {
             display: block;
-            font-size: 12px;
-            font-weight: 700;
-            color: #374151;
-            text-transform: uppercase;
-            letter-spacing: 0.07em;
-            margin-bottom: 7px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #475569;
+            margin-bottom: 8px;
         }
         .form-input {
             width: 100%;
-            padding: 11px 16px 11px 42px;
-            border: 1.5px solid #e2e8f0;
-            border-radius: 9px;
-            font-size: 14px;
-            font-family: 'Poppins', sans-serif;
-            font-weight: 500;
+            padding: 14px 16px 14px 44px;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            font-size: 15px;
+            font-family: 'Inter', sans-serif;
             color: #0f172a;
             background: #f8fafc;
             outline: none;
-            transition: all 0.2s ease;
+            transition: all 0.3s ease;
         }
         .form-input:focus {
             border-color: #3b82f6;
-            background: #fff;
+            background: #ffffff;
             box-shadow: 0 0 0 4px rgba(59,130,246,0.1);
         }
         .form-input.input-error { border-color: #ef4444; }
@@ -182,7 +186,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .input-wrap { position: relative; }
         .input-icon {
             position: absolute;
-            left: 13px;
+            left: 14px;
             top: 50%;
             transform: translateY(-50%);
             color: #94a3b8;
@@ -190,7 +194,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         .toggle-pw {
             position: absolute;
-            right: 13px;
+            right: 14px;
             top: 50%;
             transform: translateY(-50%);
             background: none;
@@ -206,24 +210,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         /* Submit */
         .btn-submit {
             width: 100%;
-            padding: 12px;
+            padding: 14px;
             background: #2563eb;
-            color: #fff;
-            font-size: 14px;
-            font-weight: 700;
-            font-family: 'Poppins', sans-serif;
+            color: #ffffff;
+            font-size: 15px;
+            font-weight: 600;
+            font-family: 'Inter', sans-serif;
             border: none;
-            border-radius: 9px;
+            border-radius: 12px;
             cursor: pointer;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-            transition: all 0.25s ease;
-            box-shadow: 0 6px 20px rgba(37,99,235,0.3);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 15px rgba(37,99,235,0.3);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
         }
         .btn-submit:hover {
             background: #1d4ed8;
-            transform: translateY(-1px);
-            box-shadow: 0 10px 28px rgba(37,99,235,0.4);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(37,99,235,0.4);
         }
         .btn-submit:active { transform: translateY(0); }
 
@@ -231,29 +237,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .error-alert {
             display: flex;
             align-items: flex-start;
-            gap: 10px;
-            padding: 12px 14px;
+            gap: 12px;
+            padding: 14px 16px;
             background: #fef2f2;
             border: 1px solid #fecaca;
-            border-radius: 9px;
-            font-size: 13px;
+            border-radius: 12px;
+            font-size: 14px;
             color: #b91c1c;
             font-weight: 500;
-            margin-bottom: 20px;
-        }
-
-        /* Feature bullets */
-        .feature-row {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-        .feature-dot {
-            width: 8px; height: 8px;
-            background: #60a5fa;
-            border-radius: 50%;
-            flex-shrink: 0;
+            margin-bottom: 24px;
         }
 
         /* Responsive */
@@ -272,55 +264,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="left-panel">
 
         <!-- Back link -->
-        <div style="margin-bottom:auto;">
+        <div class="fade-up" style="margin-bottom:auto;">
             <a href="index.php"
-               style="display:inline-flex;align-items:center;gap:6px;font-size:13px;
+               style="display:inline-flex;align-items:center;gap:6px;font-size:14px;
                       font-weight:600;color:#64748b;text-decoration:none;transition:color 0.2s;"
                onmouseover="this.style.color='#2563eb'"
                onmouseout="this.style.color='#64748b'">
-                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
                 </svg>
                 Back to Home
             </a>
         </div>
 
         <!-- Form area -->
-        <div style="flex:1; display:flex; flex-direction:column; justify-content:center; max-width:380px; width:100%; margin:0 auto; padding:40px 0;">
+        <div style="flex:1; display:flex; flex-direction:column; justify-content:center; max-width:400px; width:100%; margin:0 auto; padding:10px 0;">
 
             <!-- Logo + heading -->
-            <div style="text-align:center; margin-bottom:36px;">
-                <div style="width:80px; height:80px; background:#eff6ff; border:2px solid #bfdbfe;
-                            border-radius:50%; padding:10px; margin:0 auto 20px;
-                            display:flex; align-items:center; justify-content:center;">
+            <div class="fade-up delay-100" style="text-align:center; margin-bottom:24px;">
+                <div style="width:80px; height:80px; background:#ffffff; border:1px solid #e2e8f0;
+                            border-radius:24px; padding:12px; margin:0 auto 16px;
+                            display:flex; align-items:center; justify-content:center; box-shadow: 0 10px 25px rgba(0,0,0,0.05);">
                     <img src="assets/dict_logo.png" alt="DICT Logo" style="width:100%; height:100%; object-fit:contain;">
                 </div>
-                <h2 style="font-size:26px; font-weight:900; color:#0f172a; letter-spacing:-0.02em; margin-bottom:6px;">Sign In</h2>
-                <p style="font-size:14px; color:#64748b; font-weight:400;">
-                    Access the DICT SARO Monitoring System.
+                <h2 class="brand-font" style="font-size:32px; font-weight:800; color:#0f172a; margin-bottom:8px;">Welcome Back</h2>
+                <p style="font-size:15px; color:#64748b; font-weight:400;">
+                    Sign in to the DICT SARO Monitoring System.
                 </p>
             </div>
 
             <!-- Error alert -->
             <?php if ($error): ?>
-            <div class="error-alert">
-                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="flex-shrink:0;margin-top:1px;">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            <div class="error-alert fade-up delay-200">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" style="flex-shrink:0;">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
                 <?= htmlspecialchars($error) ?>
             </div>
             <?php endif; ?>
 
             <!-- Form -->
-            <form method="POST" action="login.php" autocomplete="off">
+            <form method="POST" action="login.php" autocomplete="off" class="fade-up delay-200">
 
                 <!-- Username -->
-                <div style="margin-bottom:18px;">
+                <div style="margin-bottom:20px;">
                     <label class="form-label" for="username">Username</label>
                     <div class="input-wrap">
                         <span class="input-icon">
-                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
                             </svg>
                         </span>
                         <input type="text" id="username" name="username"
@@ -332,12 +324,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
 
                 <!-- Password -->
-                <div style="margin-bottom:10px;">
+                <div style="margin-bottom:12px;">
                     <label class="form-label" for="password">Password</label>
                     <div class="input-wrap">
                         <span class="input-icon">
-                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
                             </svg>
                         </span>
                         <input type="password" id="password" name="password"
@@ -345,70 +337,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                placeholder="Enter your password"
                                required>
                         <button type="button" class="toggle-pw" id="togglePw" aria-label="Toggle password">
-                            <svg id="eye-open" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                            <svg id="eye-open" width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
                             </svg>
-                            <svg id="eye-closed" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="display:none;">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/>
+                            <svg id="eye-closed" width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" style="display:none;">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/>
                             </svg>
                         </button>
                     </div>
                 </div>
 
                 <!-- Forgot password -->
-                <div style="text-align:right; margin-bottom:24px;">
-                    <a href="forgot_password.php" style="font-size:12px; color:#3b82f6; font-weight:600; text-decoration:none;"
+                <div style="text-align:right; margin-bottom:30px;">
+                    <a href="forgot_password.php" style="font-size:13px; color:#3b82f6; font-weight:500; text-decoration:none; transition: color 0.2s;"
                        onmouseover="this.style.color='#1d4ed8'"
-                       onmouseout="this.style.color='#3b82f6'">Forgot your password?</a>
+                       onmouseout="this.style.color='#3b82f6'">Forgot password?</a>
                 </div>
 
                 <!-- Submit -->
-                <button type="submit" class="btn-submit">Sign In</button>
+                <button type="submit" class="btn-submit">
+                    Sign In
+                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+                </button>
 
             </form>
 
             <!-- Footer note -->
-            <p style="text-align:center; font-size:12px; color:#94a3b8; margin-top:28px; line-height:1.6; font-weight:500;">
+            <div class="fade-up delay-300" style="text-align:center; font-size:13px; color:#94a3b8; margin-top:32px; line-height:1.6; font-weight:400;">
                 For authorized DICT personnel only.<br>Unauthorized access is strictly prohibited.
-            </p>
+            </div>
 
         </div>
 
     </div>
 
-    <!-- ══ Right Panel: Image + Card ══ -->
+    <!-- ══ Right Panel: Image ══ -->
     <div class="right-panel">
         <div class="right-overlay"></div>
-
-        <div class="right-card">
-
-            <!-- Logo -->
-            <div style="width:72px; height:72px; border-radius:50%; border:2px solid rgba(255,255,255,0.5);
-                        background:#fff; padding:6px; margin-bottom:24px;
-                        display:flex; align-items:center; justify-content:center;">
-                <img src="assets/dict_logo.png" alt="DICT Logo" style="width:100%; height:100%; object-fit:contain;">
-            </div>
-
-            <p style="font-size:10px; font-weight:700; color:#93c5fd; text-transform:uppercase;
-                      letter-spacing:0.18em; margin-bottom:10px;">
-                DICT &mdash; Region IX &amp; BASULTA
-            </p>
-
-            <h3 style="font-size:clamp(22px,2.8vw,32px); font-weight:900; color:#fff;
-                        text-transform:uppercase; line-height:1.15;
-                       letter-spacing:-0.02em; margin-bottom:16px;">
-                SARO<br>Monitoring<br>
-                <span style="background:linear-gradient(90deg,#60a5fa,#bfdbfe);
-                             -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-                             background-clip:text;">System</span>
-            </h3>
-
-            <p style="font-size:14px; color:rgba(255,255,255,0.6); line-height:1.8;
-                      font-weight:400; margin-bottom:32px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:28px;">
-                Centralized fund monitoring for Special Allotment Release Orders in DRRM - DICT.
-            </p>
-        </div>
     </div>
 
     <script>

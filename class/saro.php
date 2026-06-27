@@ -3,16 +3,16 @@ require_once 'database.php';
 
 class Saro extends Database {
 
-    public function createSaro($userId, $saroNo, $title, $year, $budget, $objectCodes, $dateReleased = null, $validUntil = null) {
+    public function createSaro($userId, $saroNo, $title, $budget, $objectCodes, $dateReleased = null, $validUntil = null) {
         $conn = $this->connect();
         try {
             $conn->beginTransaction();
 
             $stmt = $conn->prepare(
-                "INSERT INTO saro (userId, saroNo, saro_title, fiscal_year, total_budget, date_released, valid_until)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)"
+                "INSERT INTO saro (userId, saroNo, saro_title, total_budget, date_released, valid_until)
+                 VALUES (?, ?, ?, ?, ?, ?)"
             );
-            $stmt->execute([$userId, $saroNo, $title, $year, $budget,
+            $stmt->execute([$userId, $saroNo, $title, $budget,
                 $dateReleased ?: null,
                 $validUntil   ?: null]);
             $saroId = $conn->lastInsertId();
@@ -40,7 +40,7 @@ class Saro extends Database {
     }
 
     public function getAllSaros() {
-        $sql = "SELECT s.saroId, s.userId, s.saroNo, s.saro_title, s.fiscal_year, s.total_budget,
+        $sql = "SELECT s.saroId, s.userId, s.saroNo, s.saro_title, s.total_budget,
                        s.date_released, s.valid_until, s.status,
                        (SELECT COUNT(*) FROM object_code oc WHERE oc.saroId = s.saroId) AS obj_count,
                        CONCAT(u.first_name, ' ', u.last_name) AS owner_name
@@ -52,7 +52,7 @@ class Saro extends Database {
 
     public function getSarosByStatus(array $statuses) {
         $placeholders = implode(',', array_fill(0, count($statuses), '?'));
-        $sql = "SELECT s.saroId, s.userId, s.saroNo, s.saro_title, s.fiscal_year, s.total_budget,
+        $sql = "SELECT s.saroId, s.userId, s.saroNo, s.saro_title, s.total_budget,
                        s.date_released, s.valid_until, s.status,
                        (SELECT COUNT(*) FROM object_code oc WHERE oc.saroId = s.saroId) AS obj_count,
                        CONCAT(u.first_name, ' ', u.last_name) AS owner_name
@@ -67,7 +67,7 @@ class Saro extends Database {
 
     public function getSaroById($saroId) {
         $stmt = $this->connect()->prepare(
-            "SELECT saroId, userId, saroNo, saro_title, fiscal_year, total_budget,
+            "SELECT saroId, userId, saroNo, saro_title, total_budget,
                     date_released, valid_until, status FROM saro WHERE saroId = ?"
         );
         $stmt->execute([$saroId]);
@@ -167,13 +167,13 @@ class Saro extends Database {
         }
     }
 
-    public function updateSaro($saroId, $saroNo, $title, $year, $budget, $status, $userId = 0, $dateReleased = null, $validUntil = null) {
+    public function updateSaro($saroId, $saroNo, $title, $budget, $status, $userId = 0, $dateReleased = null, $validUntil = null) {
         try {
             $conn = $this->connect();
             $conn->prepare(
-                "UPDATE saro SET saroNo=?, saro_title=?, fiscal_year=?, total_budget=?,
+                "UPDATE saro SET saroNo=?, saro_title=?, total_budget=?,
                          status=?, date_released=?, valid_until=? WHERE saroId=?"
-            )->execute([$saroNo, $title, $year, $budget, $status,
+            )->execute([$saroNo, $title, $budget, $status,
                 $dateReleased ?: null,
                 $validUntil   ?: null,
                 $saroId]);
@@ -227,6 +227,28 @@ class Saro extends Database {
         }
     }
 
+    public function uncancelSaro($saroId, $userId = 0, $saroNo = '') {
+        try {
+            $conn = $this->connect();
+            if (!$saroNo && $saroId) {
+                $row = $conn->prepare("SELECT saroNo FROM saro WHERE saroId=?");
+                $row->execute([$saroId]);
+                $saroNo = $row->fetchColumn() ?: "ID:{$saroId}";
+            }
+            // Auto-update status will determine if it should be active, obligated, etc., 
+            // but setting to active first is safe, checkAndAutoUpdateStatus handles logic later.
+            // Wait, we can just set it to active and call checkAndAutoUpdateStatus.
+            $conn->prepare("UPDATE saro SET status='active' WHERE saroId = ?")->execute([$saroId]);
+            if ($userId) {
+                $conn->prepare("INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address) VALUES (?, 'uncancelled', ?, 'saro', ?, ?)")
+                     ->execute([$userId, "Uncancelled SARO: {$saroNo}", $saroId, $_SERVER['REMOTE_ADDR'] ?? '']);
+            }
+            return ['success' => true];
+        } catch (Exception $e) {
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
     /**
      * Checks all active SAROs and auto-updates their status:
      * - 'obligated'  when ALL procurement activities under it are obligated AND BUR = 100%
@@ -246,13 +268,13 @@ class Saro extends Database {
             AND (
                 SELECT COUNT(*) FROM object_code oc
                 JOIN procurement p ON p.objectId = oc.objectId
-                WHERE oc.saroId = s.saroId
-            ) > 0
-            AND (
-                SELECT COUNT(*) FROM object_code oc
-                JOIN procurement p ON p.objectId = oc.objectId
-                WHERE oc.saroId = s.saroId AND p.status != 'obligated'
-            ) = 0
+                WHERE oc.saroId = s.saroId AND p.status != 'cancelled'
+              ) > 0
+              AND (
+                  SELECT COUNT(*) FROM object_code oc
+                  JOIN procurement p ON p.objectId = oc.objectId
+                  WHERE oc.saroId = s.saroId AND p.status NOT IN ('obligated', 'cancelled')
+              ) = 0
             AND (
                 SELECT COALESCE(SUM(p.obligated_amount), 0)
                 FROM object_code oc

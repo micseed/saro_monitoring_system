@@ -114,14 +114,13 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
         .signout-btn:hover { background: rgba(239,68,68,0.12); color: #fca5a5; }
 
         /* ── Main ── */
-        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
         .topbar { height: 64px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; background: #fff; border-bottom: 1px solid #e8edf5; }
         .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #64748b; }
         .breadcrumb-active { color: #0f172a; }
         .topbar-right { display: flex; align-items: center; gap: 16px; }
         .icon-btn { width: 36px; height: 36px; border-radius: 9px; background: #f8fafc; border: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; transition: all 0.2s ease; position: relative; }
         .icon-btn:hover { border-color: #ef4444; color: #dc2626; background: #fef2f2; }
-        .notif-dot { position: absolute; top: 7px; right: 7px; width: 7px; height: 7px; background: #ef4444; border-radius: 50%; border: 1.5px solid #fff; }
         .content { flex: 1; overflow-y: auto; padding: 28px 32px; }
 
         /* ── Hero ── */
@@ -251,6 +250,11 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
             </a>
+            <p class="nav-section-label">Reports</p>
+            <a href="export_records.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                Export Records
+            </a>
         </nav>
         <div class="sidebar-footer">
             <div class="user-card">
@@ -369,15 +373,15 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                         </div>
                     </div>
                     <div style="display:flex;align-items:center;gap:10px;">
-                        <div class="filter-tabs">
-                            <button type="button" class="filter-tab active">All</button>
-                            <button type="button" class="filter-tab">Pending</button>
-                            <button type="button" class="filter-tab">Approved</button>
-                            <button type="button" class="filter-tab">Rejected</button>
+                        <div class="filter-tabs" id="reqFilterTabs">
+                            <button type="button" class="filter-tab active" data-filter="all">All</button>
+                            <button type="button" class="filter-tab" data-filter="pending">Pending</button>
+                            <button type="button" class="filter-tab" data-filter="approved">Approved</button>
+                            <button type="button" class="filter-tab" data-filter="rejected">Rejected</button>
                         </div>
                         <div class="search-wrap">
                             <svg class="search-icon" width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                            <input type="text" class="search-input" placeholder="Search requests…">
+                            <input type="text" class="search-input" id="reqSearch" placeholder="Search requests...">
                         </div>
                     </div>
                 </div>
@@ -420,7 +424,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                                     }
                                 }
                             ?>
-                            <tr>
+                            <tr class="req-row" data-status="<?= htmlspecialchars($req['status']) ?>">
                                 <td style="color:#cbd5e1;font-weight:700;font-size:12px;"><?= str_pad($idx + 1, 2, '0', STR_PAD_LEFT) ?></td>
                                 <td>
                                     <div style="display:flex;align-items:center;gap:10px;">
@@ -463,8 +467,16 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                 </div>
 
                 <div class="panel-footer">
-                    <div class="show-rows-wrap"><span>Show</span><select class="show-rows-select"><option>10 rows</option><option selected>20 rows</option><option>50 rows</option></select></div>
-                    <p style="font-size:11px;color:#94a3b8;font-weight:500;">Displaying <strong style="color:#475569;"><?= $totalReq ?></strong> request<?= $totalReq !== 1 ? 's' : '' ?></p>
+                    <div class="show-rows-wrap">
+                        <span>Show</span>
+                        <select class="show-rows-select" id="reqRows">
+                            <option value="10" selected>10</option>
+                            <option value="20">20</option>
+                            <option value="50">50</option>
+                        </select>
+                        rows
+                    </div>
+                    <p style="font-size:11px;color:#94a3b8;font-weight:500;">Displaying <strong id="row-count" style="color:#475569;"><?= $totalReq ?></strong> of <strong style="color:#475569;"><?= $totalReq ?></strong> request<?= $totalReq !== 1 ? 's' : '' ?></p>
                 </div>
             </div>
 
@@ -526,7 +538,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
 
                 <div>
                     <p style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Admin Note (Optional)</p>
-                    <textarea name="admin_note" style="width:100%;padding:10px 14px;border:1px solid #e2e8f0;border-radius:9px;font-size:13px;font-family:'Poppins',sans-serif;color:#0f172a;background:#f8fafc;outline:none;resize:none;height:80px;transition:all 0.2s;" placeholder="Add a note for the user…" onfocus="this.style.borderColor='#ef4444';this.style.boxShadow='0 0 0 3px rgba(239,68,68,0.1)';" onblur="this.style.borderColor='#e2e8f0';this.style.boxShadow='none';"></textarea>
+                    <textarea name="admin_note" style="width:100%;padding:10px 14px;border:1px solid #e2e8f0;border-radius:9px;font-size:13px;font-family:'Poppins',sans-serif;color:#0f172a;background:#f8fafc;outline:none;resize:none;height:80px;transition:all 0.2s;" placeholder="Add a note for the user..." onfocus="this.style.borderColor='#ef4444';this.style.boxShadow='0 0 0 3px rgba(239,68,68,0.1)';" onblur="this.style.borderColor='#e2e8f0';this.style.boxShadow='none';"></textarea>
                 </div>
             </div>
             <div class="modal-footer">
@@ -569,7 +581,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
             alertIcon.style.stroke = '#16a34a';
             alertText.style.color  = '#166534';
             alertText.textContent  = 'Set a new password for ' + name + '. Their password will be updated immediately upon approval.';
-            confirmBtn.textContent = '✓ Approve & Reset Password';
+            confirmBtn.textContent = '✔ Approve & Reset Password';
             confirmBtn.style.background  = '#16a34a';
             confirmBtn.style.borderColor = '#16a34a';
             pwWrap.style.display = '';
@@ -584,7 +596,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
             alertIcon.style.stroke = '#dc2626';
             alertText.style.color  = '#991b1b';
             alertText.textContent  = 'Rejecting this request will deny ' + name + '\'s password change.';
-            confirmBtn.textContent = '✕ Confirm Rejection';
+            confirmBtn.textContent = '✖ Confirm Rejection';
             confirmBtn.style.background  = '#dc2626';
             confirmBtn.style.borderColor = '#dc2626';
             pwWrap.style.display = 'none';
@@ -610,6 +622,42 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
         if (e.target === document.getElementById('modal-resolve')) closeModal();
     }
 </script>
-<script src="../assets/js/table_controls.js"></script>
+<script>
+(function () {
+    const allRows  = Array.from(document.querySelectorAll('.req-row'));
+    const searchEl = document.getElementById('reqSearch');
+    const rowsSel  = document.getElementById('reqRows');
+    const countEl  = document.getElementById('row-count');
+    const tabs     = document.querySelectorAll('#reqFilterTabs .filter-tab');
+    let activeFilter = 'all';
+
+    function apply() {
+        const q     = searchEl ? searchEl.value.trim().toLowerCase() : '';
+        const limit = rowsSel ? (parseInt(rowsSel.value, 10) || 10) : 10;
+        let shown = 0;
+        allRows.forEach(function (row) {
+            const statusMatch = activeFilter === 'all' || row.dataset.status === activeFilter;
+            const searchMatch = !q || row.textContent.toLowerCase().includes(q);
+            const show = statusMatch && searchMatch && shown < limit;
+            row.style.display = show ? '' : 'none';
+            if (show) shown++;
+        });
+        if (countEl) countEl.textContent = shown;
+    }
+
+    tabs.forEach(function (tab) {
+        tab.addEventListener('click', function () {
+            tabs.forEach(function (t) { t.classList.remove('active'); });
+            tab.classList.add('active');
+            activeFilter = tab.dataset.filter;
+            apply();
+        });
+    });
+
+    if (searchEl) searchEl.addEventListener('input', apply);
+    if (rowsSel)  rowsSel.addEventListener('change', apply);
+    apply();
+})();
+</script>
 </body>
 </html>

@@ -62,7 +62,7 @@ if ($token === '') {
                     try {
                         $conn->prepare("
                             INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address)
-                            VALUES (?, 'password_reset', 'Super Admin password reset via email token', 'user', ?, ?)
+                            VALUES (?, 'password_reset', 'System Admin password reset via email token', 'user', ?, ?)
                         ")->execute([$userId, $userId, $_SERVER['REMOTE_ADDR'] ?? null]);
                     } catch (Exception $logEx) { /* non-fatal */ }
 
@@ -209,7 +209,7 @@ if ($token === '') {
             </div>
             <h2 style="font-size:24px;font-weight:900;color:#0f172a;letter-spacing:-0.02em;margin-bottom:10px;">Password Updated</h2>
             <p style="font-size:14px;color:#64748b;line-height:1.7;margin-bottom:28px;">
-                Your Super Admin password has been reset successfully. You can now sign in with your new password.
+                Your System Admin password has been reset successfully. You can now sign in with your new password.
             </p>
             <a href="login.php"
                style="display:block;padding:12px;background:#2563eb;color:#fff;font-size:14px;

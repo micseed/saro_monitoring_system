@@ -1,0 +1,670 @@
+<?php
+require_once __DIR__ . '/../includes/auth.php';
+require_once __DIR__ . '/../class/database.php';
+require_once __DIR__ . '/../class/notification.php';
+
+$username = $_SESSION['full_name'];
+$role     = $_SESSION['role'];
+$initials = $_SESSION['initials'];
+$adminId  = (int)($_SESSION['user_id'] ?? 0);
+
+$db  = new Database();
+$pdo = $db->connect();
+$pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+
+$notifObj       = new Notification();
+$notifications  = $notifObj->getRecentActivity($adminId, 10);
+$unreadCount    = $notifObj->countUnread($adminId);
+$pendingPwCount = $notifObj->countPendingPasswordRequests();
+
+$pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHERE status = 'pending'")->fetchColumn();
+
+// Available fiscal years (all except cancelled)
+$years = $pdo->query("
+    SELECT DISTINCT YEAR(date_released) as fy
+    FROM saro
+    WHERE status NOT IN ('cancelled') AND date_released IS NOT NULL
+    ORDER BY fy DESC
+")->fetchAll(PDO::FETCH_COLUMN);
+
+$selectedYear = isset($_GET['year']) && in_array((int)$_GET['year'], array_map('intval', $years))
+    ? (int)$_GET['year']
+    : (empty($years) ? (int)date('Y') : (int)$years[0]);
+
+// All SAROs for selected year except cancelled
+$saroStmt = $pdo->prepare("
+    SELECT s.saroId, s.saroNo, s.saro_title, YEAR(s.date_released) as fiscal_year, s.total_budget,
+           s.date_released, s.valid_until, s.status,
+           COUNT(DISTINCT o.objectId) AS obj_count,
+           COALESCE(SUM(CASE WHEN p.status='obligated' THEN p.obligated_amount ELSE 0 END), 0) AS total_obligated
+    FROM saro s
+    LEFT JOIN object_code o ON o.saroId = s.saroId
+    LEFT JOIN procurement p ON p.objectId = o.objectId
+    WHERE s.status NOT IN ('cancelled') AND YEAR(s.date_released) = :yr
+    GROUP BY s.saroId
+    ORDER BY s.saroNo ASC
+");
+$saroStmt->execute([':yr' => $selectedYear]);
+$saros = $saroStmt->fetchAll();
+
+// Procurement activities per SARO
+$procMap = [];
+if (!empty($saros)) {
+    $ids = implode(',', array_map(fn($s) => (int)$s['saroId'], $saros));
+    $procRows = $pdo->query("
+        SELECT p.procurementId, o.saroId, o.code AS object_code,
+               p.pro_act, p.quantity, p.unit, p.unit_cost,
+               p.obligated_amount, p.period_start, p.period_end, p.proc_date, p.remarks
+        FROM procurement p
+        JOIN object_code o ON p.objectId = o.objectId
+        WHERE o.saroId IN ($ids) AND p.status = 'obligated'
+        ORDER BY p.proc_date ASC, p.procurementId ASC
+    ")->fetchAll();
+    foreach ($procRows as $pr) {
+        $procMap[$pr['saroId']][] = $pr;
+    }
+}
+
+$yearBudget    = array_sum(array_column($saros, 'total_budget'));
+$yearObligated = array_sum(array_column($saros, 'total_obligated'));
+$yearRate      = $yearBudget > 0 ? round($yearObligated / $yearBudget * 100, 1) : 0;
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Export Records | DICT SARO Monitoring</title>
+<link href="../../dist/output.css" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,700&display=swap" rel="stylesheet">
+<style>
+* { font-family: 'Poppins', ui-sans-serif, system-ui, sans-serif; box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; background: #f0f4ff; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #c7d7fe; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #93c5fd; }
+.layout { display: flex; height: 100vh; }
+
+/* ── Sidebar ── */
+.sidebar { width: 256px; flex-shrink: 0; display: flex; flex-direction: column; background: #0f172a; position: relative; overflow: hidden; }
+.sidebar::before { content: ''; position: absolute; top: -80px; right: -80px; width: 220px; height: 220px; background: #7f1d1d; border-radius: 50%; opacity: 0.3; pointer-events: none; }
+.sidebar::after  { content: ''; position: absolute; bottom: -60px; left: -60px; width: 180px; height: 180px; background: #991b1b; border-radius: 50%; opacity: 0.15; pointer-events: none; }
+.sidebar-brand { display: flex; align-items: center; gap: 12px; padding: 28px 24px 20px; border-bottom: 1px solid rgba(255,255,255,0.06); position: relative; z-index: 1; }
+.brand-logo { width: 40px; height: 40px; border-radius: 50%; background: #fff; display: flex; align-items: center; justify-content: center; padding: 6px; flex-shrink: 0; }
+.admin-tag { margin: 14px 16px 0; padding: 7px 12px; background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.25); border-radius: 8px; position: relative; z-index: 1; display: flex; align-items: center; gap: 8px; }
+.admin-tag-dot { width: 7px; height: 7px; border-radius: 50%; background: #ef4444; animation: blink 2s infinite; flex-shrink: 0; }
+.sidebar-nav { flex: 1; padding: 16px 16px 20px; overflow-y: auto; position: relative; z-index: 1; }
+.nav-section-label { font-size: 9px; font-weight: 700; color: rgba(255,255,255,0.25); text-transform: uppercase; letter-spacing: 0.16em; padding: 0 8px; margin-bottom: 8px; margin-top: 20px; }
+.nav-section-label:first-child { margin-top: 0; }
+.nav-item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.45); text-decoration: none; cursor: pointer; border: none; background: none; width: 100%; text-align: left; transition: all 0.2s ease; margin-bottom: 2px; }
+.nav-item:hover { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.85); }
+.nav-item.active { background: #7f1d1d; color: #fff; box-shadow: 0 0 0 1px rgba(239,68,68,0.3), inset 0 1px 0 rgba(255,255,255,0.08); }
+.nav-item.active .nav-icon { color: #fca5a5; }
+.nav-icon { width: 16px; height: 16px; flex-shrink: 0; }
+.nav-badge { margin-left: auto; background: #ef4444; color: #fff; font-size: 9px; font-weight: 800; padding: 2px 7px; border-radius: 99px; }
+.sidebar-footer { padding: 16px; border-top: 1px solid rgba(255,255,255,0.06); position: relative; z-index: 1; }
+.user-card { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,0.05); margin-bottom: 8px; }
+.user-avatar { width: 34px; height: 34px; border-radius: 8px; background: linear-gradient(135deg, #dc2626, #b91c1c); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: #fff; flex-shrink: 0; }
+.signout-btn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border-radius: 10px; font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.4); background: none; border: none; cursor: pointer; text-decoration: none; transition: all 0.2s ease; }
+.signout-btn:hover { background: rgba(239,68,68,0.12); color: #fca5a5; }
+
+/* ── Main ── */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
+.topbar { height: 64px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; background: #fff; border-bottom: 1px solid #e8edf5; }
+.breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #64748b; }
+.breadcrumb-active { color: #0f172a; }
+.topbar-right { display: flex; align-items: center; gap: 16px; }
+.content { flex: 1; overflow-y: auto; padding: 28px 32px; }
+
+/* ── Hero ── */
+.hero-banner { background: linear-gradient(135deg, #7f1d1d 0%, #dc2626 100%); border-radius: 16px; padding: 28px 32px; margin-bottom: 24px; position: relative; overflow: hidden; }
+.hero-banner::before { content: ''; position: absolute; top: -60px; right: -40px; width: 220px; height: 220px; background: rgba(255,255,255,0.07); border-radius: 50%; }
+.hero-banner::after  { content: ''; position: absolute; bottom: -40px; right: 120px; width: 140px; height: 140px; background: rgba(255,255,255,0.05); border-radius: 50%; }
+
+/* ── Year tabs ── */
+.year-tabs { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+.year-tab { padding: 8px 20px; border-radius: 99px; font-size: 12px; font-weight: 700; text-decoration: none; border: 1.5px solid #e2e8f0; color: #64748b; background: #fff; transition: all 0.2s ease; }
+.year-tab:hover { border-color: #dc2626; color: #dc2626; }
+.year-tab.active { background: #dc2626; border-color: #dc2626; color: #fff; box-shadow: 0 4px 12px rgba(220,38,38,0.3); }
+
+/* ── Summary cards ── */
+.summary-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; margin-bottom: 20px; }
+.summary-card { background: #fff; border: 1px solid #e8edf5; border-radius: 12px; padding: 18px 20px; position: relative; overflow: hidden; }
+.summary-label { font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 4px; }
+.summary-value { font-size: 22px; font-weight: 900; color: #0f172a; letter-spacing: -0.02em; }
+
+/* ── Table panel ── */
+.table-panel { background: #fff; border: 1px solid #e8edf5; border-radius: 16px; overflow: hidden; }
+.panel-header { padding: 16px 24px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; }
+table { width: 100%; border-collapse: collapse; }
+thead th { padding: 11px 16px; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.12em; color: #94a3b8; background: #fafbfe; border-bottom: 1px solid #f1f5f9; white-space: nowrap; }
+tbody td { padding: 12px 16px; font-size: 12px; color: #475569; border-bottom: 1px solid #f8fafc; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: #f5f8ff; }
+
+/* ── SARO row toggle ── */
+.saro-row { cursor: pointer; user-select: none; }
+.saro-row:hover { background: #fef2f2 !important; }
+.saro-row td { font-weight: 600; }
+.proc-section { background: #fafbfe; }
+.proc-section td { padding: 0; }
+.proc-inner { padding: 0 16px 12px 40px; }
+.proc-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.proc-table th { padding: 8px 10px; font-size: 8.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #64748b; background: #f1f5f9; border-radius: 6px; }
+.proc-table td { padding: 8px 10px; font-size: 11px; color: #475569; border-bottom: 1px solid #f1f5f9; }
+.proc-table tr:last-child td { border-bottom: none; }
+
+/* ── Buttons ── */
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 18px; border-radius: 9px; font-size: 12px; font-weight: 700; font-family: 'Poppins',sans-serif; border: none; cursor: pointer; transition: all 0.2s ease; text-decoration: none; }
+.btn-export { background: #dc2626; color: #fff; }
+.btn-export:hover { background: #b91c1c; box-shadow: 0 4px 14px rgba(220,38,38,0.35); }
+
+/* ── Search & filter controls ── */
+.search-wrap { position: relative; }
+.search-input { padding: 8px 12px 8px 36px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; font-size: 12px; font-family: 'Poppins', sans-serif; width: 190px; outline: none; transition: all 0.2s ease; }
+.search-input:focus { border-color: #dc2626; background: #fff; box-shadow: 0 0 0 3px rgba(220,38,38,0.1); }
+.search-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: #94a3b8; pointer-events: none; }
+.filter-tabs { display: flex; align-items: center; gap: 5px; }
+.filter-tab { padding: 5px 11px; border-radius: 7px; border: 1px solid #e2e8f0; background: #f8fafc; color: #64748b; font-size: 11px; font-weight: 600; font-family: 'Poppins', sans-serif; cursor: pointer; transition: all 0.2s ease; }
+.filter-tab:hover { border-color: #94a3b8; color: #0f172a; background: #f1f5f9; }
+.filter-tab.active { background: #dc2626; border-color: #dc2626; color: #fff; }
+.show-rows-wrap { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #64748b; font-weight: 500; }
+.show-rows-select { padding: 5px 10px; border: 1px solid #e2e8f0; border-radius: 7px; font-size: 12px; font-family: 'Poppins', sans-serif; color: #0f172a; background: #f8fafc; outline: none; cursor: pointer; }
+
+/* ── Empty state ── */
+.empty-state { text-align: center; padding: 52px 20px; color: #94a3b8; }
+
+/* ── Print ── */
+@media print {
+    @page { size: landscape; margin: 15mm 12mm; }
+    body * { visibility: hidden; }
+    #print-area, #print-area * { visibility: visible; }
+    #print-area { position: fixed; inset: 0; background: #fff; padding: 0; }
+}
+
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<!-- ══ Sidebar ══ -->
+<aside class="sidebar">
+    <div class="sidebar-brand">
+        <div class="brand-logo">
+            <img src="../assets/dict_logo.png" alt="DICT Logo" style="width:100%;height:100%;object-fit:contain;">
+        </div>
+        <div>
+            <p style="font-size:13px;font-weight:800;color:#fff;text-transform:uppercase;letter-spacing:0.05em;line-height:1.1;">DICT Portal</p>
+            <p style="font-size:8px;color:rgba(255,255,255,0.3);font-weight:700;text-transform:uppercase;letter-spacing:0.2em;">Region IX &amp; BASULTA</p>
+        </div>
+    </div>
+    <div class="admin-tag">
+        <div class="admin-tag-dot"></div>
+        <p style="font-size:9px;font-weight:800;color:#fca5a5;text-transform:uppercase;letter-spacing:0.15em;">Admin Control Panel</p>
+    </div>
+    <nav class="sidebar-nav">
+        <p class="nav-section-label">Overview</p>
+        <a href="dashboard.php" class="nav-item">
+            <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
+            Dashboard
+        </a>
+        <p class="nav-section-label">Management</p>
+        <a href="users.php" class="nav-item">
+            <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+            Users
+        </a>
+        <a href="password_requests.php" class="nav-item">
+            <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+            Password Requests
+            <?php if ($pendingReqCount > 0): ?><span class="nav-badge"><?= $pendingReqCount ?></span><?php endif; ?>
+        </a>
+        <a href="activity_logs.php" class="nav-item">
+            <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            Activity Logs
+        </a>
+        <p class="nav-section-label">Reports</p>
+        <a href="export_records.php" class="nav-item active">
+            <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            Export Records
+        </a>
+    </nav>
+    <div class="sidebar-footer">
+        <div class="user-card">
+            <div class="user-avatar"><?= htmlspecialchars($initials) ?></div>
+            <div style="min-width:0;">
+                <p style="font-size:12px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= htmlspecialchars($username) ?></p>
+                <p style="font-size:10px;color:rgba(255,255,255,0.3);font-weight:500;"><?= htmlspecialchars($role) ?></p>
+            </div>
+        </div>
+        <a href="../logout.php" class="signout-btn">
+            <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+            Sign Out
+        </a>
+    </div>
+</aside>
+
+<!-- ══ Main ══ -->
+<main class="main">
+    <header class="topbar">
+        <div class="breadcrumb">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m0 0l-7 7-7-7M19 10v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+            <span>Home</span>
+            <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <a href="dashboard.php" style="text-decoration:none;color:inherit;">Admin Panel</a>
+            <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="breadcrumb-active">Export Records</span>
+        </div>
+        <div class="topbar-right">
+            <?php $isAdmin = true; $pendingPwCount = $pendingPwCount ?? 0; $approvedPwReq = $approvedPwReq ?? null; include __DIR__ . '/../includes/notif_dropdown.php'; ?>
+            <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
+                <div style="width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#dc2626,#b91c1c);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff;"><?= htmlspecialchars($initials) ?></div>
+                <div>
+                    <p style="font-size:12px;font-weight:700;color:#0f172a;line-height:1.1;"><?= htmlspecialchars($username) ?></p>
+                    <p style="font-size:10px;color:#94a3b8;font-weight:500;"><?= htmlspecialchars($role) ?></p>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="content">
+
+        <!-- Hero -->
+        <div class="hero-banner">
+            <div style="position:relative;z-index:1;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
+                <div>
+                    <p style="font-size:10px;font-weight:700;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:0.16em;margin-bottom:6px;">Admin Reports</p>
+                    <h2 style="font-size:22px;font-weight:900;color:#fff;text-transform:uppercase;letter-spacing:-0.01em;margin-bottom:6px;">Export Records</h2>
+                    <p style="font-size:13px;color:rgba(255,255,255,0.65);font-weight:400;max-width:480px;line-height:1.6;">
+                        Annual report of obligated SARO records and their obligated procurement activities.
+                    </p>
+                </div>
+                <?php if (!empty($saros)): ?>
+                <button class="btn btn-export" onclick="printReport()" style="flex-shrink:0;margin-top:4px;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);color:#fff;">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+                    Print Report
+                </button>
+                <?php endif; ?>
+            </div>
+        </div>
+
+        <!-- Year tabs -->
+        <?php if (!empty($years)): ?>
+        <div class="year-tabs">
+            <?php foreach ($years as $yr): ?>
+            <a href="?year=<?= (int)$yr ?>" class="year-tab <?= (int)$yr === $selectedYear ? 'active' : '' ?>">
+                FY <?= (int)$yr ?>
+            </a>
+            <?php endforeach; ?>
+        </div>
+        <?php endif; ?>
+
+        <?php if (empty($years)): ?>
+        <div class="table-panel">
+            <div class="empty-state">
+                <svg width="48" height="48" fill="none" stroke="#cbd5e1" viewBox="0 0 24 24" style="margin:0 auto 12px;display:block;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                <p style="font-size:14px;font-weight:700;color:#94a3b8;margin-bottom:4px;">No obligated records yet</p>
+                <p style="font-size:12px;color:#cbd5e1;">Reports will appear here once SAROs are fully obligated.</p>
+            </div>
+        </div>
+
+        <?php else: ?>
+
+        <!-- Summary cards -->
+        <div class="summary-grid">
+            <div class="summary-card">
+                <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#3b82f6,#93c5fd);border-radius:12px 12px 0 0;"></div>
+                <p class="summary-label">Total SAROs</p>
+                <p class="summary-value"><?= count($saros) ?></p>
+                <p style="font-size:10px;color:#94a3b8;font-weight:500;margin-top:4px;">FY <?= $selectedYear ?></p>
+            </div>
+            <div class="summary-card">
+                <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#dc2626,#f87171);border-radius:12px 12px 0 0;"></div>
+                <p class="summary-label">Total Budget</p>
+                <p class="summary-value" style="font-size:18px;">&#8369;<?= number_format($yearBudget, 2) ?></p>
+                <p style="font-size:10px;color:#94a3b8;font-weight:500;margin-top:4px;">Combined SARO allocation</p>
+            </div>
+            <div class="summary-card">
+                <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#16a34a,#4ade80);border-radius:12px 12px 0 0;"></div>
+                <p class="summary-label">Total Obligated</p>
+                <p class="summary-value" style="font-size:18px;color:#16a34a;">&#8369;<?= number_format($yearObligated, 2) ?></p>
+                <p style="font-size:10px;color:#94a3b8;font-weight:500;margin-top:4px;"><?= $yearRate ?>% utilization rate</p>
+            </div>
+        </div>
+
+        <!-- Records table -->
+        <div class="table-panel">
+            <div class="panel-header">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <div style="width:32px;height:32px;border-radius:8px;background:#fef2f2;display:flex;align-items:center;justify-content:center;">
+                        <svg width="15" height="15" fill="none" stroke="#dc2626" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    </div>
+                    <div>
+                        <p style="font-size:13px;font-weight:800;color:#0f172a;">FY <?= $selectedYear ?> SARO Records</p>
+                        <p style="font-size:10px;color:#94a3b8;font-weight:500;">Click a SARO row to expand its obligated procurement activities</p>
+                    </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <div class="filter-tabs">
+                        <button class="filter-tab active">All</button>
+                        <button class="filter-tab">Active</button>
+                        <button class="filter-tab">Obligated</button>
+                        <button class="filter-tab">Lapsed</button>
+                    </div>
+                    <div class="search-wrap">
+                        <svg class="search-icon" width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                        <input type="text" class="search-input" placeholder="Type to search...">
+                    </div>
+                    <button class="btn btn-export" onclick="printReport()">
+                        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+                        Print Report
+                    </button>
+                </div>
+            </div>
+
+            <div style="overflow-x:auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width:44px;text-align:left;">No.</th>
+                            <th style="text-align:left;">SARO No.</th>
+                            <th style="text-align:left;">SARO Title</th>
+                            <th style="text-align:center;">Status</th>
+                            <th style="text-align:right;">Total Budget</th>
+                            <th style="text-align:right;">Total Obligated</th>
+                            <th style="text-align:center;">Valid Until</th>
+                            <th style="text-align:center;width:32px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php
+                        $statusStyles = [
+                            'active'    => 'background:#dbeafe;color:#1d4ed8;',
+                            'obligated' => 'background:#dcfce7;color:#16a34a;',
+                            'lapsed'    => 'background:#fee2e2;color:#dc2626;',
+                        ];
+                        foreach ($saros as $i => $s):
+                            $procs    = $procMap[$s['saroId']] ?? [];
+                            $bur      = $s['total_budget'] > 0 ? round($s['total_obligated'] / $s['total_budget'] * 100, 1) : 0;
+                            $validFmt = $s['valid_until'] ? date('M d, Y', strtotime($s['valid_until'])) : '—';
+                            $rowId    = 'proc-' . $s['saroId'];
+                            $sstyle   = $statusStyles[$s['status']] ?? 'background:#f1f5f9;color:#64748b;';
+                        ?>
+                        <tr class="saro-row" data-status="<?= htmlspecialchars($s['status']) ?>" onclick="toggleProc('<?= $rowId ?>', this)">
+                            <td style="color:#cbd5e1;font-size:12px;"><?= str_pad($i+1,2,'0',STR_PAD_LEFT) ?></td>
+                            <td><span style="font-weight:800;color:#0f172a;font-size:13px;"><?= htmlspecialchars($s['saroNo']) ?></span></td>
+                            <td style="max-width:220px;"><p style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#334155;"><?= htmlspecialchars($s['saro_title']) ?></p></td>
+                            <td style="text-align:center;"><span style="display:inline-flex;align-items:center;padding:3px 9px;border-radius:99px;font-size:10px;font-weight:700;text-transform:capitalize;<?= $sstyle ?>"><?= htmlspecialchars($s['status']) ?></span></td>
+                            <td style="text-align:right;font-weight:700;color:#334155;">&#8369;<?= number_format((float)$s['total_budget'],2) ?></td>
+                            <td style="text-align:right;">
+                                <p style="font-weight:800;color:#16a34a;font-size:12px;margin-bottom:1px;">&#8369;<?= number_format((float)$s['total_obligated'],2) ?></p>
+                                <p style="font-size:10px;color:#4ade80;font-weight:600;"><?= $bur ?>% of budget</p>
+                            </td>
+                            <td style="text-align:center;font-size:11px;color:#64748b;"><?= $validFmt ?></td>
+                            <td style="text-align:center;">
+                                <svg class="chevron-<?= $rowId ?>" width="14" height="14" fill="none" stroke="#94a3b8" viewBox="0 0 24 24" style="transition:transform 0.2s ease;">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                </svg>
+                            </td>
+                        </tr>
+                        <tr id="<?= $rowId ?>" class="proc-section" style="display:none;">
+                            <td colspan="8">
+                                <div class="proc-inner">
+                                    <?php if (empty($procs)): ?>
+                                    <p style="font-size:12px;color:#94a3b8;padding:10px 0;">No obligated procurement activities found for this SARO.</p>
+                                    <?php else: ?>
+                                    <table class="proc-table">
+                                        <thead>
+                                            <tr>
+                                                <th style="text-align:left;">Object Code</th>
+                                                <th style="text-align:left;">Procurement Activity</th>
+                                                <th style="text-align:center;">Qty</th>
+                                                <th style="text-align:center;">Unit</th>
+                                                <th style="text-align:right;">Unit Cost</th>
+                                                <th style="text-align:right;">Obligated Amount</th>
+                                                <th style="text-align:center;">Period</th>
+                                                <th style="text-align:center;">Proc. Date</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <?php foreach ($procs as $p):
+                                                $period = '';
+                                                if ($p['period_start'] && $p['period_end']) {
+                                                    $period = date('M d', strtotime($p['period_start'])) . ' — ' . date('M d, Y', strtotime($p['period_end']));
+                                                } elseif ($p['period_start']) {
+                                                    $period = date('M d, Y', strtotime($p['period_start']));
+                                                }
+                                                $procDate = $p['proc_date'] ? date('M d, Y', strtotime($p['proc_date'])) : '—';
+                                            ?>
+                                            <tr>
+                                                <td><span style="font-weight:700;color:#dc2626;"><?= htmlspecialchars($p['object_code']) ?></span></td>
+                                                <td style="max-width:200px;"><p style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= htmlspecialchars($p['pro_act'] ?? '—') ?></p></td>
+                                                <td style="text-align:center;"><?= $p['quantity'] ?? '—' ?></td>
+                                                <td style="text-align:center;"><?= htmlspecialchars($p['unit'] ?? '—') ?></td>
+                                                <td style="text-align:right;"><?= $p['unit_cost'] ? '\u20B1'.number_format((float)$p['unit_cost'],2) : '—' ?></td>
+                                                <td style="text-align:right;font-weight:700;color:#16a34a;">&#8369;<?= number_format((float)$p['obligated_amount'],2) ?></td>
+                                                <td style="text-align:center;font-size:11px;"><?= $period ?: '—' ?></td>
+                                                <td style="text-align:center;font-size:11px;"><?= $procDate ?></td>
+                                            </tr>
+                                            <?php endforeach; ?>
+                                        </tbody>
+                                    </table>
+                                    <?php endif; ?>
+                                </div>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+
+            <div style="padding:14px 24px;border-top:1px solid #f1f5f9;background:#fafbfe;display:flex;align-items:center;justify-content:space-between;">
+                <div style="display:flex;align-items:center;gap:16px;">
+                    <div class="show-rows-wrap">
+                        <span>Show</span>
+                        <select class="show-rows-select">
+                            <option selected>10 rows</option>
+                            <option>20 rows</option>
+                            <option>30 rows</option>
+                            <option>50 rows</option>
+                        </select>
+                    </div>
+                    <p style="font-size:11px;color:#94a3b8;font-weight:500;">Displaying <strong id="row-count" style="color:#475569;"><?= min(10, count($saros)) ?></strong> of <strong style="color:#475569;"><?= count($saros) ?></strong> SARO records for FY <?= $selectedYear ?></p>
+                </div><!-- /left -->
+                <div style="display:flex;align-items:center;gap:20px;">
+                    <div style="text-align:right;">
+                        <p style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px;">Total Budget</p>
+                        <p style="font-size:15px;font-weight:900;color:#0f172a;letter-spacing:-0.02em;">&#8369;<?= number_format($yearBudget,2) ?></p>
+                    </div>
+                    <div style="width:1px;height:32px;background:#e2e8f0;"></div>
+                    <div style="text-align:right;">
+                        <p style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px;">Total Obligated</p>
+                        <p style="font-size:15px;font-weight:900;color:#16a34a;letter-spacing:-0.02em;">&#8369;<?= number_format($yearObligated,2) ?></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <?php endif; ?>
+
+    </div>
+</main>
+</div>
+
+<div id="print-area" style="display:none;"></div>
+
+<script>
+function toggleProc(id, row) {
+    const section = document.getElementById(id);
+    const chevron = document.querySelector('.chevron-' + id);
+    const isOpen  = section.style.display !== 'none';
+    section.style.display = isOpen ? 'none' : '';
+    if (chevron) chevron.style.transform = isOpen ? '' : 'rotate(180deg)';
+}
+
+(function () {
+    const panel = document.querySelector('.table-panel');
+    if (!panel) return;
+    const tbody = panel.querySelector('tbody');
+    if (!tbody) return;
+    const saroRows = Array.from(tbody.querySelectorAll('tr.saro-row'));
+    if (!saroRows.length) return;
+    const searchInput = panel.querySelector('.search-input');
+    const rowsSel = panel.querySelector('.show-rows-select');
+    const filterTabs = panel.querySelectorAll('.filter-tab');
+    const countEl = document.getElementById('row-count');
+    let activeStatus = 'all';
+
+    function apply() {
+        const q = searchInput ? searchInput.value.trim().toLowerCase() : '';
+        const limit = rowsSel ? (parseInt(rowsSel.value, 10) || 10) : 10;
+        let shown = 0, matched = 0;
+        saroRows.forEach(function (row) {
+            const procSection = row.nextElementSibling;
+            const statusOk = activeStatus === 'all' || row.dataset.status === activeStatus;
+            const searchOk = !q || row.textContent.toLowerCase().includes(q);
+            const isMatch = statusOk && searchOk;
+            if (isMatch) matched++;
+            const show = isMatch && shown < limit;
+            row.style.display = show ? '' : 'none';
+            if (procSection && procSection.classList.contains('proc-section') && !show) {
+                procSection.style.display = 'none';
+            }
+            if (show) shown++;
+        });
+        if (countEl) countEl.textContent = shown;
+    }
+
+    filterTabs.forEach(function (tab) {
+        tab.addEventListener('click', function () {
+            filterTabs.forEach(function (t) { t.classList.remove('active'); });
+            tab.classList.add('active');
+            activeStatus = tab.textContent.trim().toLowerCase();
+            apply();
+        });
+    });
+
+    if (searchInput) searchInput.addEventListener('input', apply);
+    if (rowsSel) rowsSel.addEventListener('change', apply);
+    apply();
+})();
+
+const reportData = <?= json_encode([
+    'year'         => $selectedYear,
+    'saros'        => array_map(fn($s) => [
+        'saroId'          => $s['saroId'],
+        'saroNo'          => $s['saroNo'],
+        'saro_title'      => $s['saro_title'],
+        'total_budget'    => (float)$s['total_budget'],
+        'total_obligated' => (float)$s['total_obligated'],
+        'valid_until'     => $s['valid_until'],
+        'procurements'    => $procMap[$s['saroId']] ?? [],
+    ], $saros),
+    'yearBudget'    => $yearBudget,
+    'yearObligated' => $yearObligated,
+    'yearRate'      => $yearRate,
+]) ?>;
+
+function printReport() {
+    const fmt = n => '\u20B1' + parseFloat(n).toLocaleString('en-PH', {minimumFractionDigits:2, maximumFractionDigits:2});
+    const fmtDate = d => d ? new Date(d).toLocaleDateString('en-PH', {year:'numeric',month:'short',day:'numeric'}) : '—';
+    const fmtPeriod = (s, e) => {
+        if (!s && !e) return '—';
+        const ds = s ? new Date(s).toLocaleDateString('en-PH',{month:'short',day:'numeric'}) : '';
+        const de = e ? new Date(e).toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'}) : '';
+        return ds && de ? ds + ' — ' + de : (ds || de);
+    };
+
+    let saroPrint = '';
+    reportData.saros.forEach((s, si) => {
+        const bur = s.total_budget > 0 ? (s.total_obligated / s.total_budget * 100).toFixed(1) : '0.0';
+        let procRows = '';
+        if (s.procurements.length) {
+            s.procurements.forEach(p => {
+                procRows += `<tr>
+                    <td>${p.object_code}</td>
+                    <td>${p.pro_act || '—'}</td>
+                    <td class="c">${p.quantity || '—'}</td>
+                    <td class="c">${p.unit || '—'}</td>
+                    <td class="r">${p.unit_cost ? fmt(p.unit_cost) : '—'}</td>
+                    <td class="r"><strong>${fmt(p.obligated_amount)}</strong></td>
+                    <td class="c">${fmtPeriod(p.period_start, p.period_end)}</td>
+                    <td class="c">${fmtDate(p.proc_date)}</td>
+                </tr>`;
+            });
+        } else {
+            procRows = '<tr><td colspan="8" class="c" style="color:#888;font-style:italic;">No procurement activities</td></tr>';
+        }
+
+        saroPrint += `
+        <div class="saro-block">
+            <div class="saro-head">
+                <div>
+                    <span class="saro-num">${String(si+1).padStart(2,'0')}.</span>
+                    <strong>${s.saroNo}</strong>
+                    <span class="saro-title">${s.saro_title}</span>
+                </div>
+                <div class="saro-summary">
+                    <span>Budget: <strong>${fmt(s.total_budget)}</strong></span>
+                    <span>Obligated: <strong style="color:#86efac;">${fmt(s.total_obligated)}</strong></span>
+                    <span>BUR: <strong>${bur}%</strong></span>
+                    <span>Valid Until: ${fmtDate(s.valid_until)}</span>
+                </div>
+            </div>
+            <table class="pt">
+                <thead><tr>
+                    <th>Object Code</th><th>Procurement Activity</th>
+                    <th class="c">Qty</th><th class="c">Unit</th>
+                    <th class="r">Unit Cost</th><th class="r">Obligated Amt</th>
+                    <th class="c">Period</th><th class="c">Proc. Date</th>
+                </tr></thead>
+                <tbody>${procRows}</tbody>
+            </table>
+        </div>`;
+    });
+
+    const now = new Date().toLocaleDateString('en-PH',{year:'numeric',month:'long',day:'numeric'});
+    document.getElementById('print-area').innerHTML = `
+    <style>
+        #print-area { font-family: Arial, sans-serif; font-size: 10.5px; color: #111; padding: 24px 28px; }
+        #print-area .rpt-header { margin-bottom: 18px; border-bottom: 2px solid #7f1d1d; padding-bottom: 12px; }
+        #print-area .rpt-header h1 { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #7f1d1d; }
+        #print-area .rpt-header p { font-size: 10px; color: #555; margin-top: 3px; }
+        #print-area .summary-bar { display: flex; gap: 28px; margin-bottom: 16px; padding: 10px 14px; background: #fef2f2; border-radius: 6px; }
+        #print-area .summary-bar span { font-size: 11px; }
+        #print-area .saro-block { margin-bottom: 18px; page-break-inside: avoid; }
+        #print-area .saro-head { background: #7f1d1d; color: #fff; padding: 7px 10px; border-radius: 5px 5px 0 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        #print-area .saro-num  { font-weight: 700; margin-right: 5px; }
+        #print-area .saro-title { color: rgba(255,255,255,0.7); font-size: 10px; margin-left: 6px; }
+        #print-area .saro-summary { display: flex; gap: 14px; font-size: 10px; color: rgba(255,255,255,0.85); flex-wrap: wrap; }
+        #print-area .pt { width: 100%; border-collapse: collapse; }
+        #print-area .pt thead th { background: #fee2e2; padding: 6px 8px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; text-align: left; }
+        #print-area .pt tbody td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; font-size: 10px; }
+        #print-area .pt tbody tr:nth-child(even) { background: #fff5f5; }
+        #print-area .pt .c { text-align: center; }
+        #print-area .pt .r { text-align: right; }
+        #print-area .rpt-footer { margin-top: 18px; font-size: 10px; color: #555; text-align: right; border-top: 1px solid #ddd; padding-top: 8px; }
+    </style>
+    <div class="rpt-header">
+        <h1>Obligated SARO Records &amp; Procurement Activities — FY ${reportData.year}</h1>
+        <p>DICT — Zamboanga-BASULTA Cluster &nbsp;|&nbsp; Printed: ${now}</p>
+    </div>
+    <div class="summary-bar">
+        <span>Total SAROs: <strong>${reportData.saros.length}</strong></span>
+        <span>Total Budget: <strong>${fmt(reportData.yearBudget)}</strong></span>
+        <span>Total Obligated: <strong>${fmt(reportData.yearObligated)}</strong></span>
+        <span>Utilization Rate: <strong>${reportData.yearRate}%</strong></span>
+    </div>
+    ${saroPrint || '<p style="text-align:center;color:#888;padding:20px;">No records for this year.</p>'}
+    <div class="rpt-footer">Total records: ${reportData.saros.length} &nbsp;|&nbsp; Report generated on ${now}</div>`;
+
+    const area = document.getElementById('print-area');
+    area.style.display = 'block';
+    window.print();
+    window.onafterprint = () => { area.style.display = 'none'; };
+}
+</script>
+</body>
+</html>

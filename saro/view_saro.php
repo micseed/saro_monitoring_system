@@ -135,6 +135,27 @@ if (!empty($_POST['ajax_action'])) {
                 break;
             }
 
+            // Budget guard: new amount must not push total obligated past the SARO budget
+            $newAmount = $unitCost * $qty;
+            $stBudget = $conn->prepare("SELECT total_budget FROM saro WHERE saroId = ?");
+            $stBudget->execute([$saroId]);
+            $saroTotalBudget = (float)($stBudget->fetchColumn() ?: 0);
+
+            $stUsed = $conn->prepare("
+                SELECT COALESCE(SUM(p.obligated_amount), 0)
+                FROM procurement p
+                JOIN object_code oc ON p.objectId = oc.objectId
+                WHERE oc.saroId = ? AND p.status != 'cancelled'
+            ");
+            $stUsed->execute([$saroId]);
+            $alreadyUsed = (float)$stUsed->fetchColumn();
+
+            if ($saroTotalBudget > 0 && ($alreadyUsed + $newAmount) > $saroTotalBudget) {
+                $remaining = $saroTotalBudget - $alreadyUsed;
+                echo json_encode(['success' => false, 'error' => 'Amount exceeds SARO budget. Remaining balance: &#8369;' . number_format($remaining, 2) . '.', 'code' => 'budget_exceeded']);
+                break;
+            }
+
             $stmt = $conn->prepare("
                 INSERT INTO procurement
                     (objectId, userId, pro_act, is_travelExpense, quantity, unit, unit_cost,
@@ -184,6 +205,27 @@ if (!empty($_POST['ajax_action'])) {
             $vioE   = $procurementScheduleViolation($vuEdit, $periodStart, $periodEnd, $procDateEdit !== '' ? $procDateEdit : null);
             if ($vioE !== null) {
                 echo json_encode(['success' => false, 'error' => $vioE, 'code' => 'valid_until_period']);
+                break;
+            }
+
+            // Budget guard: edited amount must not push total (excluding this row) past the SARO budget
+            $editNewAmount = $unitCost * $qty;
+            $stBudgetE = $conn->prepare("SELECT total_budget FROM saro WHERE saroId = ?");
+            $stBudgetE->execute([$saroId]);
+            $saroTotalBudgetE = (float)($stBudgetE->fetchColumn() ?: 0);
+
+            $stUsedE = $conn->prepare("
+                SELECT COALESCE(SUM(p.obligated_amount), 0)
+                FROM procurement p
+                JOIN object_code oc ON p.objectId = oc.objectId
+                WHERE oc.saroId = ? AND p.status != 'cancelled' AND p.procurementId != ?
+            ");
+            $stUsedE->execute([$saroId, $procId]);
+            $alreadyUsedE = (float)$stUsedE->fetchColumn();
+
+            if ($saroTotalBudgetE > 0 && ($alreadyUsedE + $editNewAmount) > $saroTotalBudgetE) {
+                $remainingE = $saroTotalBudgetE - $alreadyUsedE;
+                echo json_encode(['success' => false, 'error' => 'Amount exceeds SARO budget. Remaining balance: &#8369;' . number_format($remainingE, 2) . '.', 'code' => 'budget_exceeded']);
                 break;
             }
 
@@ -253,8 +295,8 @@ if (!empty($_POST['ajax_action'])) {
             $dateReleased = !empty($_POST['date_released']) ? strip_tags($_POST['date_released']) : null;
             $validUntil   = !empty($_POST['valid_until'])   ? strip_tags($_POST['valid_until'])   : null;
             $saroTitle    = strip_tags(trim($_POST['saro_title'] ?? ''));
-            $conn->prepare("UPDATE saro SET saro_title=?,fiscal_year=?,total_budget=?,date_released=?,valid_until=? WHERE saroId=?")
-                 ->execute([$saroTitle, (int)($_POST['fiscal_year']??0), (float)($_POST['total_budget']??0), $dateReleased, $validUntil, $saroId]);
+            $conn->prepare("UPDATE saro SET saro_title=?,total_budget=?,date_released=?,valid_until=? WHERE saroId=?")
+                 ->execute([$saroTitle, (float)($_POST['total_budget']??0), $dateReleased, $validUntil, $saroId]);
             echo json_encode(['success' => true]);
             break;
         }
@@ -307,7 +349,33 @@ if (!empty($_POST['ajax_action'])) {
                 break;
             }
             $newCode = strip_tags(trim($_POST['code']??''));
-            $conn->prepare("UPDATE object_code SET code=?,projected_cost=? WHERE objectId=?")->execute([$newCode, (float)($_POST['projected_cost']??0), $oid]);
+            $isTravel = (int)($_POST['is_travelExpense'] ?? 0) === 1 ? 1 : 0;
+            
+            // Check old is_travelExpense
+            $stOldTravel = $conn->prepare("SELECT is_travelExpense FROM object_code WHERE objectId = ?");
+            $stOldTravel->execute([$oid]);
+            $oldIsTravel = (int)$stOldTravel->fetchColumn();
+
+            $conn->prepare("UPDATE object_code SET code=?,projected_cost=?,is_travelExpense=? WHERE objectId=?")->execute([$newCode, (float)($_POST['projected_cost']??0), $isTravel, $oid]);
+            
+            if ($oldIsTravel !== $isTravel) {
+                // Update all associated procurements to match the new is_travelExpense
+                // and reset their status to 'on_process' (unless cancelled) since required documents have changed
+                $conn->prepare("UPDATE procurement SET is_travelExpense = ?, status = IF(status='cancelled', 'cancelled', 'on_process') WHERE objectId = ?")->execute([$isTravel, $oid]);
+                
+                // Fetch all procurement IDs for this object code
+                $stProcs = $conn->prepare("SELECT procurementId FROM procurement WHERE objectId = ?");
+                $stProcs->execute([$oid]);
+                $procIds = $stProcs->fetchAll(PDO::FETCH_COLUMN);
+                
+                if (!empty($procIds)) {
+                    $inQuery = implode(',', array_fill(0, count($procIds), '?'));
+                    // Delete old documents and signatures because the requirements have changed
+                    $conn->prepare("DELETE FROM proc_documents WHERE procurementId IN ($inQuery)")->execute($procIds);
+                    $conn->prepare("DELETE FROM proc_signatures WHERE procurementId IN ($inQuery)")->execute($procIds);
+                }
+            }
+            
             $conn->prepare("DELETE FROM expense_items WHERE objectId=?")->execute([$oid]);
             if (!empty(trim($_POST['expense_item']??''))) $conn->prepare("INSERT INTO expense_items (objectId,item_name) VALUES (?,?)")->execute([$oid, strip_tags(trim($_POST['expense_item']))]);
 
@@ -442,10 +510,10 @@ $calTitleTrunc = static function (string $s, int $max = 40): string {
         return '';
     }
     if (function_exists('mb_strlen') && mb_strlen($t) > $max) {
-        return mb_substr($t, 0, $max - 1) . '…';
+        return mb_substr($t, 0, $max - 1) . '...';
     }
     if (!function_exists('mb_strlen') && strlen($t) > $max) {
-        return substr($t, 0, $max - 1) . '…';
+        return substr($t, 0, $max - 1) . '...';
     }
     return $t;
 };
@@ -651,7 +719,7 @@ if ($bur < 25) {
         .signout-btn:hover { background: rgba(239,68,68,0.12); color: #fca5a5; }
 
         /* ── Main ── */
-        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
         .topbar {
             height: 64px; flex-shrink: 0;
             display: flex; align-items: center; justify-content: space-between;
@@ -668,11 +736,6 @@ if ($bur < 25) {
             transition: all 0.2s ease; position: relative;
         }
         .icon-btn:hover { border-color: #3b82f6; color: #2563eb; background: #eff6ff; }
-        .notif-dot {
-            position: absolute; top: 7px; right: 7px;
-            width: 7px; height: 7px; background: #ef4444;
-            border-radius: 50%; border: 1.5px solid #fff;
-        }
         .content { flex: 1; overflow-y: auto; padding: 28px 32px; }
 
         /* Hero */
@@ -1006,7 +1069,7 @@ if ($bur < 25) {
                         </div>
                         <div>
                             <p class="form-label">Fiscal Year</p>
-                            <p style="font-size:14px;font-weight:700;color:#0f172a;"><?= htmlspecialchars($saro['fiscal_year']) ?></p>
+                            <p style="font-size:14px;font-weight:700;color:#0f172a;"><?= $saro['date_released'] ? date('Y', strtotime($saro['date_released'])) : '—' ?></p>
                         </div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                             <div>
@@ -1020,17 +1083,17 @@ if ($bur < 25) {
                         </div>
                         <div style="padding:12px 14px;background:#f8fafc;border:1px solid #e8edf5;border-radius:10px;">
                             <p class="form-label" style="margin-bottom:4px;">Total Budget</p>
-                            <p style="font-size:16px;font-weight:900;color:#0f172a;letter-spacing:-0.02em;">₱<?= number_format($totalBudget, 2) ?></p>
+                            <p style="font-size:16px;font-weight:900;color:#0f172a;letter-spacing:-0.02em;">&#8369;<?= number_format($totalBudget, 2) ?></p>
                         </div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                             <div style="padding:10px 12px;background:#eff6ff;border:1px solid #dbeafe;border-radius:8px;">
                                 <p class="form-label" style="margin-bottom:3px;color:#1d4ed8;">Obligated</p>
-                                <p style="font-size:13px;font-weight:800;color:#1d4ed8;">₱<?= number_format($totalObligated, 2) ?></p>
+                                <p style="font-size:13px;font-weight:800;color:#1d4ed8;">&#8369;<?= number_format($totalObligated, 2) ?></p>
                                 <p style="font-size:10px;color:#60a5fa;font-weight:600;"><?= number_format($bur, 1) ?>% of budget</p>
                             </div>
                             <div style="padding:10px 12px;background:#fef9c3;border:1px solid #fde68a;border-radius:8px;">
                                 <p class="form-label" style="margin-bottom:3px;color:#b45309;">Unobligated</p>
-                                <p style="font-size:13px;font-weight:800;color:#b45309;">₱<?= number_format($unobligated, 2) ?></p>
+                                <p style="font-size:13px;font-weight:800;color:#b45309;">&#8369;<?= number_format($unobligated, 2) ?></p>
                                 <p style="font-size:10px;color:#d97706;font-weight:600;"><?= number_format(100 - $bur, 1) ?>% of budget</p>
                             </div>
                         </div>
@@ -1098,12 +1161,12 @@ if ($bur < 25) {
                                         <td style="color:#cbd5e1;font-weight:700;font-size:11px;"><?= str_pad($index + 1, 2, '0', STR_PAD_LEFT) ?></td>
                                         <td><span style="font-weight:700;color:#0f172a;"><?= htmlspecialchars($obj['code']) ?></span></td>
                                         <td style="color:#334155;font-weight:500;"><?= htmlspecialchars($obj['expense_items'] ?: '—') ?></td>
-                                        <td style="text-align:right;font-weight:700;color:#0f172a;">₱<?= number_format($obj['projected_cost'], 2) ?></td>
+                                        <td style="text-align:right;font-weight:700;color:#0f172a;">&#8369;<?= number_format($obj['projected_cost'], 2) ?></td>
                                         <td style="text-align:right;">
                                             <div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;">
                                                 <?php if ($canManageSaro): ?>
                                                 <button class="action-btn action-btn-edit" title="Edit"
-                                                        onclick="openEditObjModal(<?= $obj['objectId'] ?>,'<?= htmlspecialchars($obj['code'],ENT_QUOTES) ?>','<?= $obj['projected_cost'] ?>','<?= htmlspecialchars($obj['expense_items']??'',ENT_QUOTES) ?>')">
+                                                        onclick="openEditObjModal(<?= $obj['objectId'] ?>,'<?= htmlspecialchars($obj['code'],ENT_QUOTES) ?>','<?= $obj['projected_cost'] ?>','<?= htmlspecialchars($obj['expense_items']??'',ENT_QUOTES) ?>', <?= (int)$obj['is_travelExpense'] ?>)">
                                                     <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
                                                 </button>
                                                 <button class="action-btn action-btn-del" title="Remove" onclick="openDeleteObjModal(<?= $obj['objectId'] ?>,'<?= htmlspecialchars($obj['code'],ENT_QUOTES) ?>')">
@@ -1137,18 +1200,34 @@ if ($bur < 25) {
                             <p style="font-size:10px;color:#94a3b8;font-weight:500;">SARO validity, procurement periods, and activity dates</p>
                         </div>
                     </div>
+                    <button class="btn btn-ghost btn-sm" onclick="toggleScheduleOverview()" title="Minimize / Expand" style="padding:6px; border-radius:8px;">
+                        <svg id="icon-minimize-schedule" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
+                    </button>
                 </div>
-                <div style="padding:20px;">
+                <div id="schedule-overview-body" style="padding:20px;">
                     <div class="calendar-legend">
                         <span><i class="cal-lg-dot" style="background:#ef4444;"></i>SARO valid until</span>
                         <span><i class="cal-lg-dot" style="background:#64748b;"></i>SARO released</span>
-                        <span><i class="cal-lg-bar" style="background:#e9d5ff;border:1px solid #c4b5fd;"></i>Procurement period (spans start–end)</span>
+                        <span><i class="cal-lg-bar" style="background:#e9d5ff;border:1px solid #c4b5fd;"></i>Procurement period (spans start—end)</span>
                         <span><i class="cal-lg-dot" style="background:#7c3aed;"></i>Period end only / partial range</span>
                         <span><i class="cal-lg-dot" style="background:#3b82f6;"></i>Procurement activity date</span>
                     </div>
-                    <div id="calendar"><p style="margin:20px;color:#64748b;font-size:13px;">Loading calendar…</p></div>
+                    <div id="calendar"><p style="margin:20px;color:#64748b;font-size:13px;">Loading calendar...</p></div>
                 </div>
             </div>
+            <script>
+            function toggleScheduleOverview() {
+                const body = document.getElementById('schedule-overview-body');
+                const icon = document.getElementById('icon-minimize-schedule');
+                if (body.style.display === 'none') {
+                    body.style.display = 'block';
+                    icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/>';
+                } else {
+                    body.style.display = 'none';
+                    icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>';
+                }
+            }
+            </script>
 
             <!-- Row 2: Procurement Activities -->
             <div class="card" style="margin-bottom:0;">
@@ -1174,7 +1253,7 @@ if ($bur < 25) {
                         </div>
                         <div class="search-wrap">
                             <svg class="search-icon" width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                            <input type="text" class="search-input" placeholder="Type to search…">
+                            <input type="text" class="search-input" placeholder="Type to search...">
                         </div>
                         <button class="btn btn-ghost btn-sm">
                             <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>
@@ -1243,17 +1322,17 @@ if ($bur < 25) {
                                     <td><p style="font-weight:600;color:#0f172a;font-size:12px;"><?= htmlspecialchars($p['pro_act'] ?? '—') ?></p></td>
                                     <td style="text-align:center;font-weight:700;color:#0f172a;"><?= htmlspecialchars($p['quantity']) ?></td>
                                     <td style="text-align:center;color:#64748b;"><?= htmlspecialchars($p['unit'] ?? '—') ?></td>
-                                    <td style="text-align:right;font-weight:600;color:#334155;">₱<?= number_format((float)$p['unit_cost'], 2) ?></td>
+                                    <td style="text-align:right;font-weight:600;color:#334155;">&#8369;<?= number_format((float)$p['unit_cost'], 2) ?></td>
                                     <td style="text-align:right;">
                                         <?php if (!$isObligated): ?>
-                                            <span style="font-weight:700;color:#b45309;font-size:12px;">₱<?= number_format((float)$alloc, 2) ?></span>
+                                            <span style="font-weight:700;color:#b45309;font-size:12px;">&#8369;<?= number_format((float)$alloc, 2) ?></span>
                                         <?php else: ?>
                                             <span style="font-size:11px;color:#cbd5e1;">—</span>
                                         <?php endif; ?>
                                     </td>
                                     <td style="text-align:right;">
                                         <?php if ($isObligated): ?>
-                                            <span style="font-weight:700;color:#16a34a;font-size:12px;">₱<?= number_format((float)$alloc, 2) ?></span>
+                                            <span style="font-weight:700;color:#16a34a;font-size:12px;">&#8369;<?= number_format((float)$alloc, 2) ?></span>
                                         <?php else: ?>
                                             <span style="font-size:11px;color:#cbd5e1;">—</span>
                                         <?php endif; ?>
@@ -1305,12 +1384,12 @@ if ($bur < 25) {
                     <div style="display:flex;align-items:center;gap:20px;">
                         <div style="text-align:right;">
                             <p style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px;">Overall Total Budget</p>
-                            <p style="font-size:15px;font-weight:900;color:#1d4ed8;letter-spacing:-0.02em;">₱<?= number_format($totalBudget, 2) ?></p>
+                            <p style="font-size:15px;font-weight:900;color:#1d4ed8;letter-spacing:-0.02em;">&#8369;<?= number_format($totalBudget, 2) ?></p>
                         </div>
                         <div style="width:1px;height:32px;background:#e2e8f0;"></div>
                         <div style="text-align:right;">
                             <p style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px;">Remaining Balance</p>
-                            <p style="font-size:15px;font-weight:900;color:#16a34a;letter-spacing:-0.02em;">₱<?= number_format($unobligated, 2) ?></p>
+                            <p style="font-size:15px;font-weight:900;color:#16a34a;letter-spacing:-0.02em;">&#8369;<?= number_format($unobligated, 2) ?></p>
                         </div>
                     </div>
                 </div>
@@ -1354,7 +1433,7 @@ if ($bur < 25) {
                                 <td style="padding:11px 14px;font-size:12px;font-weight:600;color:#6b7280;text-decoration:line-through;"><?= htmlspecialchars($cp['pro_act'] ?? '—') ?></td>
                                 <td style="padding:11px 14px;font-size:12px;color:#9ca3af;text-align:center;"><?= htmlspecialchars($cp['quantity']) ?></td>
                                 <td style="padding:11px 14px;font-size:12px;color:#9ca3af;text-align:center;"><?= htmlspecialchars($cp['unit'] ?? '—') ?></td>
-                                <td style="padding:11px 14px;font-size:12px;color:#9ca3af;text-align:right;">₱<?= number_format((float)$cp['unit_cost'], 2) ?></td>
+                                <td style="padding:11px 14px;font-size:12px;color:#9ca3af;text-align:right;">&#8369;<?= number_format((float)$cp['unit_cost'], 2) ?></td>
                                 <td style="padding:11px 14px;font-size:11px;color:#9ca3af;"><?= $cpStart ?> — <?= $cpEnd ?></td>
                                 <td style="padding:11px 14px;font-size:11px;color:#9ca3af;"><?= $cpDate ?></td>
                                 <td style="padding:11px 14px;font-size:11px;color:#9ca3af;"><?= htmlspecialchars($cp['remarks'] ?: '—') ?></td>
@@ -1396,7 +1475,7 @@ if ($bur < 25) {
             <div>
                 <label class="form-label">Object Code <span style="color:#dc2626;">*</span></label>
                 <select class="form-input" id="proc-obj-code" onchange="handleProcObjChange(this); if(this.value!==''){this.classList.remove('input-error');document.getElementById('err-proc-obj-code').style.display='none';}else{this.classList.add('input-error');document.getElementById('err-proc-obj-code').style.display='block';}">
-                    <option value="">Select object code…</option>
+                    <option value="">Select object code...</option>
                     <?php foreach ($objectCodes as $obj): ?>
                         <option value="<?= (int)$obj['objectId'] ?>" data-travel="<?= (int)$obj['is_travelExpense'] ?>">
                             <?= htmlspecialchars($obj['code']) ?><?= !empty($obj['expense_items']) ? ' — '.htmlspecialchars(mb_strimwidth($obj['expense_items'],0,38,'...')) : '' ?>
@@ -1419,15 +1498,16 @@ if ($bur < 25) {
                 <div>
                     <label class="form-label">Unit <span style="font-size:9px;color:#94a3b8;font-weight:500;text-transform:none;">(optional)</span></label>
                     <select class="form-input" id="proc-unit">
-                        <option value="">— None —</option>
+                        <option value="">- None -</option>
                         <option>Unit</option><option>Lot</option><option>Set</option>
                         <option>Month</option><option>Year</option><option>Piece</option>
                         <option>Pack</option><option>Trip</option><option>Batch</option>
-                        <option>Session</option>
+                        <option>Session</option><option>Pax</option><option>Day</option>
+                        <option>Ream</option><option>Box</option>
                     </select>
                 </div>
                 <div>
-                    <label class="form-label">Unit Cost (₱) <span style="color:#dc2626;">*</span></label>
+                    <label class="form-label">Unit Cost (&#8369;) <span style="color:#dc2626;">*</span></label>
                     <input type="number" class="form-input" id="proc-unit-cost" placeholder="0.00" min="0" step="0.01" oninput="updateBudgetAlloc(); if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-proc-unit-cost').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-proc-unit-cost').style.display='none'; }">
                     <p class="field-error" id="err-proc-unit-cost">Unit cost is required!</p>
                 </div>
@@ -1435,14 +1515,14 @@ if ($bur < 25) {
             <!-- Budget allocation live display -->
             <div id="proc-budget-alloc-wrap" style="display:none;padding:10px 14px;background:#eff6ff;border:1.5px solid #bfdbfe;border-radius:10px;">
                 <div style="display:flex;align-items:center;justify-content:space-between;">
-                    <span style="font-size:11px;font-weight:700;color:#1e40af;text-transform:uppercase;letter-spacing:0.08em;">Budget Allocation (Qty × Unit Cost)</span>
-                    <span id="proc-budget-alloc-val" style="font-size:15px;font-weight:900;color:#1d4ed8;letter-spacing:-0.02em;">₱0.00</span>
+                    <span style="font-size:11px;font-weight:700;color:#1e40af;text-transform:uppercase;letter-spacing:0.08em;">Budget Allocation (Qty Ã— Unit Cost)</span>
+                    <span id="proc-budget-alloc-val" style="font-size:15px;font-weight:900;color:#1d4ed8;letter-spacing:-0.02em;">&#8369;0.00</span>
                 </div>
                 <div id="proc-budget-warning" style="display:none;margin-top:8px;padding:8px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;">
                     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
                         <div style="display:flex;align-items:center;gap:6px;">
                             <svg width="13" height="13" fill="none" stroke="#dc2626" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                            <span style="font-size:11px;font-weight:600;color:#b91c1c;">Exceeds projected cost of <span id="proc-projected-cost-val">₱0.00</span> — projected cost is just an estimate.</span>
+                            <span style="font-size:11px;font-weight:600;color:#b91c1c;">Exceeds projected cost of <span id="proc-projected-cost-val">&#8369;0.00</span> — projected cost is just an estimate.</span>
                         </div>
                         <button type="button" onclick="dismissCostWarning()"
                                 style="padding:3px 10px;border-radius:6px;border:1px solid #fca5a5;background:#fee2e2;color:#b91c1c;font-size:10px;font-weight:700;font-family:'Poppins',sans-serif;cursor:pointer;white-space:nowrap;flex-shrink:0;">
@@ -1470,7 +1550,7 @@ if ($bur < 25) {
                                 <option>July</option><option>August</option><option>September</option>
                                 <option>October</option><option>November</option><option>December</option>
                             </select>
-                            <input type="number" class="form-input" id="proc-start-year" value="<?= htmlspecialchars($saro['fiscal_year']) ?>" min="2020" max="2099" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-proc-start-year').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-proc-start-year').style.display='none'; }">
+                            <input type="number" class="form-input" id="proc-start-year" value="<?= $saro['date_released'] ? date('Y', strtotime($saro['date_released'])) : '' ?>" min="2020" max="2099" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-proc-start-year').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-proc-start-year').style.display='none'; }">
                         </div>
                         <p class="field-error" id="err-proc-start-month">Start month is required!</p>
                         <p class="field-error" id="err-proc-start-year">Start year is required!</p>
@@ -1486,7 +1566,7 @@ if ($bur < 25) {
                                 <option>July</option><option>August</option><option>September</option>
                                 <option>October</option><option>November</option><option>December</option>
                             </select>
-                            <input type="number" class="form-input" id="proc-end-year" value="<?= htmlspecialchars($saro['fiscal_year']) ?>" min="2020" max="2099" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-proc-end-year').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-proc-end-year').style.display='none'; }">
+                            <input type="number" class="form-input" id="proc-end-year" value="<?= $saro['date_released'] ? date('Y', strtotime($saro['date_released'])) : '' ?>" min="2020" max="2099" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-proc-end-year').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-proc-end-year').style.display='none'; }">
                         </div>
                         <p class="field-error" id="err-proc-end-month">End month is required!</p>
                         <p class="field-error" id="err-proc-end-year">End year is required!</p>
@@ -1494,13 +1574,13 @@ if ($bur < 25) {
                 </div>
             </div>
             <div>
-                <label class="form-label">Procurement Date <span style="color:#dc2626;">*</span></label>
-                <input type="date" class="form-input" id="proc-date" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-proc-date').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-proc-date').style.display='none'; }">
-                <p class="field-error" id="err-proc-date">Procurement date is required!</p>
+                <label class="form-label">Procurement Date</label>
+                <input type="date" class="form-input" id="proc-date" oninput="this.classList.remove('input-error'); document.getElementById('err-proc-date').style.display='none';">
+                <p class="field-error" id="err-proc-date" style="display:none;"></p>
             </div>
             <div>
                 <label class="form-label">Remarks</label>
-                <input type="text" class="form-input" id="proc-remarks" placeholder="Optional notes…">
+                <input type="text" class="form-input" id="proc-remarks" placeholder="Optional notes...">
             </div>
             <!-- Travel note (shown when OC is travel expense) -->
             <div id="travel-note-section" style="display:none;border:1.5px solid #3b82f6;border-radius:12px;padding:14px 16px;background:#eff6ff;">
@@ -1549,7 +1629,7 @@ if ($bur < 25) {
             <div>
                 <label class="form-label">Object Code <span style="color:#dc2626;">*</span></label>
                 <select class="form-input" id="ep-obj-code" onchange="if(this.value!==''){this.classList.remove('input-error');document.getElementById('err-ep-obj-code').style.display='none';}else{this.classList.add('input-error');document.getElementById('err-ep-obj-code').style.display='block';}">
-                    <option value="">Select object code…</option>
+                    <option value="">Select object code...</option>
                     <?php foreach ($objectCodes as $obj): ?>
                         <option value="<?= htmlspecialchars($obj['code'],ENT_QUOTES) ?>">
                             <?= htmlspecialchars($obj['code']) ?><?= !empty($obj['expense_items']) ? ' — '.htmlspecialchars(mb_strimwidth($obj['expense_items'],0,30,'...')) : '' ?>
@@ -1572,14 +1652,16 @@ if ($bur < 25) {
                 <div>
                     <label class="form-label">Unit <span style="font-size:9px;color:#94a3b8;font-weight:500;text-transform:none;">(optional)</span></label>
                     <select class="form-input" id="ep-unit">
-                        <option value="">— None —</option>
+                        <option value="">- None -</option>
                         <option>Unit</option><option>Lot</option><option>Set</option>
                         <option>Month</option><option>Year</option><option>Piece</option>
-                        
+                        <option>Pack</option><option>Trip</option><option>Batch</option>
+                        <option>Session</option><option>Pax</option><option>Day</option>
+                        <option>Ream</option><option>Box</option>
                     </select>
                 </div>
                 <div>
-                    <label class="form-label">Unit Cost (₱) <span style="color:#dc2626;">*</span></label>
+                    <label class="form-label">Unit Cost (&#8369;) <span style="color:#dc2626;">*</span></label>
                     <input type="number" class="form-input" id="ep-unit-cost" placeholder="0.00" min="0" step="0.01" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-ep-unit-cost').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-ep-unit-cost').style.display='none'; }">
                     <p class="field-error" id="err-ep-unit-cost">Unit cost is required!</p>
                 </div>
@@ -1627,13 +1709,13 @@ if ($bur < 25) {
                 </div>
             </div>
             <div>
-                <label class="form-label">Procurement Date <span style="color:#dc2626;">*</span></label>
+                <label class="form-label">Procurement Date</label>
                 <input type="date" class="form-input" id="ep-date" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-ep-date').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-ep-date').style.display='none'; }">
                 <p class="field-error" id="err-ep-date">Procurement date is required!</p>
             </div>
             <div>
                 <label class="form-label">Remarks</label>
-                <input type="text" class="form-input" id="ep-remarks" placeholder="Optional notes…">
+                <input type="text" class="form-input" id="ep-remarks" placeholder="Optional notes...">
             </div>
         </div>
         <div style="padding:16px 28px;border-top:1px solid #f1f5f9;background:#fafbfe;
@@ -1669,11 +1751,7 @@ if ($bur < 25) {
                 <input type="text" class="form-input" id="edit-saro-title" value="<?= htmlspecialchars($saro['saro_title']) ?>" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-edit-saro-title').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-edit-saro-title').style.display='none'; }">
                 <p class="field-error" id="err-edit-saro-title">SARO title is required!</p>
             </div>
-            <div>
-                <label class="form-label">Fiscal Year <span style="color:#dc2626;">*</span></label>
-                <input type="number" class="form-input" id="edit-fiscal-year" value="<?= htmlspecialchars($saro['fiscal_year']) ?>" min="2020" max="2099" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-edit-fiscal-year').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-edit-fiscal-year').style.display='none'; }">
-                <p class="field-error" id="err-edit-fiscal-year">Fiscal year is required!</p>
-            </div>
+
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
                 <div>
                     <label class="form-label">Date Released <span style="color:#dc2626;">*</span></label>
@@ -1687,7 +1765,7 @@ if ($bur < 25) {
                 </div>
             </div>
             <div>
-                <label class="form-label">Total Budget (₱) <span style="color:#dc2626;">*</span></label>
+                <label class="form-label">Total Budget (&#8369;) <span style="color:#dc2626;">*</span></label>
                 <input type="number" class="form-input" id="edit-total-budget" value="<?= htmlspecialchars($saro['total_budget']) ?>" min="0" step="0.01" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-edit-total-budget').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-edit-total-budget').style.display='none'; }">
                 <p class="field-error" id="err-edit-total-budget">Total budget is required!</p>
             </div>
@@ -1732,8 +1810,8 @@ if ($bur < 25) {
                         padding:6px 10px;background:#f8fafc;border:1px solid #e8edf5;
                         border-radius:8px 8px 0 0;border-bottom:none;margin-bottom:0;">
                 <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Object Code <span style="color:#dc2626;">*</span></p>
-                <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Projected Cost (₱)</p>
-                <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Expense Item <span style="color:#dc2626;">*</span></p>
+                <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Projected Cost (&#8369;)</p>
+                <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Expense Item</p>
                 <p style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;">Travel?</p>
                 <span></span>
             </div>
@@ -1772,13 +1850,19 @@ if ($bur < 25) {
                 <p class="field-error" id="err-edit-obj-code">Object code is required!</p>
             </div>
             <div>
-                <label class="form-label">Projected Cost (₱) <span style="color:#dc2626;">*</span></label>
+                <label class="form-label">Projected Cost (&#8369;) <span style="color:#dc2626;">*</span></label>
                 <input type="number" class="form-input" id="edit-obj-cost" min="0" step="0.01" oninput="if(this.value.trim()===''){ this.classList.add('input-error'); document.getElementById('err-edit-obj-cost').style.display='block'; } else { this.classList.remove('input-error'); document.getElementById('err-edit-obj-cost').style.display='none'; }">
                 <p class="field-error" id="err-edit-obj-cost">Projected cost is required!</p>
             </div>
             <div>
                 <label class="form-label">Expense Item</label>
-                <input type="text" class="form-input" id="edit-obj-expense-item" placeholder="Enter expense item description…">
+                <input type="text" class="form-input" id="edit-obj-expense-item" placeholder="Enter expense item description...">
+            </div>
+            <div style="margin-top:12px;">
+                <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#64748b;cursor:pointer;">
+                    <input type="checkbox" id="edit-obj-travel" style="width:14px;height:14px;accent-color:#3b82f6;cursor:pointer;"> 
+                    Travel Expense
+                </label>
             </div>
         </div>
         <div class="modal-footer">
@@ -1832,7 +1916,7 @@ if ($bur < 25) {
         <div class="modal-body">
             <div>
                 <label class="form-label">Remarks</label>
-                <textarea class="form-input" id="remarks-textarea" style="min-height:80px;" placeholder="Enter remarks…"></textarea>
+                <textarea class="form-input" id="remarks-textarea" style="min-height:80px;" placeholder="Enter remarks..."></textarea>
             </div>
         </div>
         <div class="modal-footer">
@@ -1992,11 +2076,11 @@ if ($bur < 25) {
         if (qty > 0 && cost > 0) {
             wrap.style.display = '';
             document.getElementById('proc-budget-alloc-val').textContent =
-                '₱' + alloc.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+                '\u20B1' + alloc.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
             const oc = objCodesData.find(o => o.objectId === objId);
             if (oc && oc.projected_cost > 0 && alloc > oc.projected_cost) {
                 document.getElementById('proc-projected-cost-val').textContent =
-                    '₱' + oc.projected_cost.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+                    '\u20B1' + oc.projected_cost.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
                 warnEl.style.display = '';
             } else {
                 warnEl.style.display = 'none';
@@ -2027,7 +2111,7 @@ if ($bur < 25) {
         if (!getVal('proc-start-year'))  { setFieldError('proc-start-year','err-proc-start-year','Start year is required!'); ok = false; }
         if (!getVal('proc-end-month'))   { setFieldError('proc-end-month','err-proc-end-month','End month is required!'); ok = false; }
         if (!getVal('proc-end-year'))    { setFieldError('proc-end-year','err-proc-end-year','End year is required!'); ok = false; }
-        if (!getVal('proc-date'))        { setFieldError('proc-date','err-proc-date','Procurement date is required!'); ok = false; }
+
         
         if (!ok) return;
 
@@ -2051,7 +2135,7 @@ if ($bur < 25) {
             } else if (vuT && getVal('proc-date') > vuT) {
                 setFieldError('proc-date', 'err-proc-date', 'After SARO expiry');
             }
-            openWarningModal(pvErr + '\n\nShorten or move the procurement period and date, or extend “Valid Until” in SARO Details.', 'Cannot save — SARO validity limit');
+            openWarningModal(pvErr + '\n\nShorten or move the procurement period and date, or extend “Valid Until” in SARO Details.', 'Cannot save — SARO validity limit');
             return;
         }
 
@@ -2128,7 +2212,7 @@ if ($bur < 25) {
         if (!getVal('ep-start-year'))  { setFieldError('ep-start-year','err-ep-start-year','Start year is required!'); ok = false; }
         if (!getVal('ep-end-month'))   { setFieldError('ep-end-month','err-ep-end-month','End month is required!'); ok = false; }
         if (!getVal('ep-end-year'))    { setFieldError('ep-end-year','err-ep-end-year','End year is required!'); ok = false; }
-        if (!getVal('ep-date'))        { setFieldError('ep-date','err-ep-date','Procurement date is required!'); ok = false; }
+        
         
         if (!ok) return;
 
@@ -2152,7 +2236,7 @@ if ($bur < 25) {
             } else if (vuT && getVal('ep-date') > vuT) {
                 setFieldError('ep-date', 'err-ep-date', 'After SARO expiry');
             }
-            openWarningModal(pvEd + '\n\nShorten or move the procurement period and date, or extend “Valid Until” in SARO Details.', 'Cannot save — SARO validity limit');
+            openWarningModal(pvEd + '\n\nShorten or move the procurement period and date, or extend “Valid Until” in SARO Details.', 'Cannot save — SARO validity limit');
             return;
         }
 
@@ -2186,7 +2270,6 @@ if ($bur < 25) {
         }
         clearErrors(
             ['edit-saro-title', 'err-edit-saro-title'],
-            ['edit-fiscal-year', 'err-edit-fiscal-year'],
             ['edit-date-released', 'err-edit-date-released'],
             ['edit-valid-until', 'err-edit-valid-until'],
             ['edit-total-budget', 'err-edit-total-budget']
@@ -2201,7 +2284,6 @@ if ($bur < 25) {
     function saveEditSaro() {
         clearErrors(
             ['edit-saro-title', 'err-edit-saro-title'],
-            ['edit-fiscal-year', 'err-edit-fiscal-year'],
             ['edit-date-released', 'err-edit-date-released'],
             ['edit-valid-until', 'err-edit-valid-until'],
             ['edit-total-budget', 'err-edit-total-budget']
@@ -2209,7 +2291,7 @@ if ($bur < 25) {
         
         let ok = true;
         if (!getVal('edit-saro-title')) { setFieldError('edit-saro-title', 'err-edit-saro-title', 'SARO title is required!'); ok = false; }
-        if (!getVal('edit-fiscal-year')) { setFieldError('edit-fiscal-year', 'err-edit-fiscal-year', 'Fiscal year is required!'); ok = false; }
+
         if (!getVal('edit-date-released')) { setFieldError('edit-date-released', 'err-edit-date-released', 'Date released is required!'); ok = false; }
         if (!getVal('edit-valid-until')) { setFieldError('edit-valid-until', 'err-edit-valid-until', 'Valid until is required!'); ok = false; }
         if (!getVal('edit-total-budget')) { setFieldError('edit-total-budget', 'err-edit-total-budget', 'Total budget is required!'); ok = false; }
@@ -2225,7 +2307,7 @@ if ($bur < 25) {
 
         postAjax({
             ajax_action: 'edit_saro', saroId: currentSaroId,
-            saro_title: sanitize(getVal('edit-saro-title')), fiscal_year: sanitize(getVal('edit-fiscal-year')),
+            saro_title: sanitize(getVal('edit-saro-title')),
             date_released: sanitize(getVal('edit-date-released')), valid_until: sanitize(getVal('edit-valid-until')),
             total_budget: sanitize(getVal('edit-total-budget')),
         }).then(d => {
@@ -2275,8 +2357,7 @@ if ($bur < 25) {
                 <input type="number" class="obj-cost-inp" placeholder="0.00" min="0" step="0.01" style="${inp}" ${foc} ${blr}>
             </div>
             <div>
-                <input type="text" class="obj-exp-inp" placeholder="e.g. ICT Equipment" style="${inp}" ${foc} ${blr} ${onInpCode.replace('Object code', 'Expense item')}>
-                <p class="field-error" style="margin-top:4px;display:none;">Expense item is required!</p>
+                <input type="text" class="obj-exp-inp" placeholder="e.g. ICT Equipment" style="${inp}" ${foc} ${blr}>
             </div>
             <label style="display:flex;align-items:center;gap:5px;font-size:10px;font-weight:600;color:#64748b;white-space:nowrap;cursor:pointer;padding-top:7px;">
                 <input type="checkbox" class="obj-trv-inp" style="width:13px;height:13px;accent-color:#3b82f6;cursor:pointer;"> Travel
@@ -2324,15 +2405,9 @@ if ($bur < 25) {
                 codeInp.nextElementSibling.style.display = 'block';
                 ok = false;
             }
-            if (exp === '') {
-                expInp.classList.add('input-error');
-                expInp.style.borderColor = '#dc2626';
-                expInp.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.1)';
-                expInp.nextElementSibling.style.display = 'block';
-                ok = false;
-            }
+
             
-            if (code !== '' && exp !== '') {
+            if (code !== '') {
                 items.push({ code, cost: parseFloat(costInp.value) || 0, expense_item: exp, is_travel: trvInp.checked ? 1 : 0 });
             }
         });
@@ -2360,7 +2435,7 @@ if ($bur < 25) {
     }
 
     // ─── Edit Object Code Modal ───────────────────────────────────────────────
-    function openEditObjModal(objectId, code, cost, item) {
+    function openEditObjModal(objectId, code, cost, item, isTravel) {
         if (!canManageSaro) {
             openWarningModal('Only the SARO creator can edit object codes.', 'View only');
             return;
@@ -2370,6 +2445,7 @@ if ($bur < 25) {
         setVal('edit-obj-code', code);
         setVal('edit-obj-cost', cost);
         setVal('edit-obj-expense-item', item || '');
+        document.getElementById('edit-obj-travel').checked = (isTravel === 1);
         document.getElementById('editObjModal').classList.add('open');
         setTimeout(() => document.getElementById('edit-obj-code').focus(), 100);
     }
@@ -2399,6 +2475,7 @@ if ($bur < 25) {
             ajax_action: 'edit_object_code', saroId: currentSaroId, objectId,
             code: sanitize(getVal('edit-obj-code')), projected_cost: getVal('edit-obj-cost'),
             expense_item: sanitize(getVal('edit-obj-expense-item')),
+            is_travelExpense: document.getElementById('edit-obj-travel').checked ? 1 : 0
         }).then(d => {
             if (d.success) location.reload();
             else openWarningModal(d.error || 'Save failed.', 'Could not update object code');
@@ -2484,7 +2561,8 @@ if ($bur < 25) {
     function openWarningModal(msg, title) {
         var th = document.getElementById('warning-modal-title');
         if (th) th.textContent = title || 'Validation Error';
-        document.getElementById('warning-msg').textContent = msg || '';
+        // Use innerHTML so we can style parts of the error message (like bolding)
+        document.getElementById('warning-msg').innerHTML = msg ? msg.replace(/\n/g, '<br>') : '';
         document.getElementById('warningModal').classList.add('open');
     }
     function closeWarningModal() {
@@ -2536,15 +2614,21 @@ if ($bur < 25) {
 
 <!-- Generic Warning Modal for Validation -->
 <div class="modal-overlay" id="warningModal" style="z-index: 10000;">
-    <div class="modal-card" style="max-width:400px;">
-        <div style="padding:24px;text-align:center;">
-            <div style="width:48px;height:48px;border-radius:50%;background:#fef2f2;
-                        display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">
-                <svg width="24" height="24" fill="none" stroke="#ef4444" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+    <div class="modal-card" style="max-width:420px; padding:0; overflow:hidden;">
+        <div style="background:#fff; border-bottom:1px solid #f1f5f9; padding:20px 24px; display:flex; align-items:center; gap:12px;">
+            <div style="width:36px;height:36px;border-radius:10px;background:#fef2f2;
+                        display:flex;align-items:center;justify-content:center; flex-shrink:0;">
+                <svg width="20" height="20" fill="none" stroke="#ef4444" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
             </div>
-            <h3 id="warning-modal-title" style="font-size:18px;font-weight:800;color:#0f172a;margin-bottom:10px;">Validation Error</h3>
-            <p id="warning-msg" style="font-size:13px;color:#475569;line-height:1.65;margin-bottom:24px;white-space:pre-line;text-align:left;"></p>
-            <button class="btn-submit" onclick="closeWarningModal()">Understood</button>
+            <h3 id="warning-modal-title" style="font-size:16px;font-weight:800;color:#0f172a; margin:0;">Validation Error</h3>
+        </div>
+        <div style="padding:24px;">
+            <div style="background:#fff7f7; border:1px solid #fee2e2; border-radius:12px; padding:16px; margin-bottom:24px;">
+                <p id="warning-msg" style="font-size:13px;color:#991b1b;line-height:1.6; margin:0; text-align:left;"></p>
+            </div>
+            <div style="display:flex; justify-content:center;">
+                <button onclick="closeWarningModal()" style="padding:10px 32px; border-radius:10px; background:#ef4444; color:#fff; font-weight:700; font-size:12px; border:none; cursor:pointer; font-family:'Poppins',sans-serif; transition: background 0.2s ease;" onmouseover="this.style.background='#dc2626'" onmouseout="this.style.background='#ef4444'">Understood</button>
+            </div>
         </div>
     </div>
 </div>

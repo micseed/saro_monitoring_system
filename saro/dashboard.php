@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../includes/auth.php';
 $username = $_SESSION['full_name'];
 $role     = $_SESSION['role'];
@@ -11,8 +11,8 @@ $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
 require_once __DIR__ . '/../class/notification.php';
 
-$totalSaros     = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status IN ('active','obligated')")->fetchColumn();
-$totalBudget    = (float)$pdo->query("SELECT COALESCE(SUM(total_budget),0) FROM saro WHERE status IN ('active','obligated')")->fetchColumn();
+$totalSaros     = (int)$pdo->query("SELECT COUNT(*) FROM saro WHERE status IN ('active','obligated') AND YEAR(date_released) = YEAR(CURDATE())")->fetchColumn();
+$totalBudget    = (float)$pdo->query("SELECT COALESCE(SUM(total_budget),0) FROM saro WHERE status IN ('active','obligated') AND YEAR(date_released) = YEAR(CURDATE())")->fetchColumn();
 $totalObligated = (float)$pdo->query("
     SELECT COALESCE(SUM(p.obligated_amount),0)
     FROM procurement p
@@ -20,6 +20,7 @@ $totalObligated = (float)$pdo->query("
     JOIN saro s ON s.saroId = o.saroId
     WHERE p.status = 'obligated'
       AND s.status IN ('active','obligated')
+      AND YEAR(s.date_released) = YEAR(CURDATE())
 ")->fetchColumn();
 $unobligated = $totalBudget - $totalObligated;
 $utilRate    = $totalBudget > 0 ? round($totalObligated / $totalBudget * 100, 1) : 0;
@@ -38,7 +39,8 @@ $saros = $pdo->query("
     FROM saro s
     LEFT JOIN object_code o ON o.saroId = s.saroId
     LEFT JOIN procurement p ON p.objectId = o.objectId AND p.status = 'obligated'
-    WHERE s.status IN ('active','obligated')
+    WHERE s.status IN ('active','obligated','lapsed')
+      AND YEAR(s.date_released) = YEAR(CURDATE())
     GROUP BY s.saroId
     ORDER BY s.created_at ASC
 ")->fetchAll();
@@ -175,7 +177,7 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
         .signout-btn:hover { background: rgba(239,68,68,0.12); color: #fca5a5; }
 
         /* ── Main ── */
-        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
 
         /* Topbar */
         .topbar {
@@ -199,12 +201,6 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
             transition: all 0.2s ease; position: relative;
         }
         .icon-btn:hover { border-color: #3b82f6; color: #2563eb; background: #eff6ff; }
-        .notif-dot {
-            position: absolute; top: 7px; right: 7px;
-            width: 7px; height: 7px; background: #ef4444;
-            border-radius: 50%; border: 1.5px solid #fff;
-        }
-
         /* ── Content ── */
         .content { flex: 1; overflow-y: auto; padding: 28px 32px; }
 
@@ -359,6 +355,15 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
             display: flex; align-items: center; justify-content: space-between;
             flex-shrink: 0;
         }
+
+        /* ── Filter tabs ── */
+        .filter-tabs { display: flex; align-items: center; gap: 3px; background: #f1f5f9; border-radius: 10px; padding: 4px; }
+        .filter-tab { padding: 6px 14px; border-radius: 7px; font-size: 11px; font-weight: 700; cursor: pointer; transition: all 0.2s; color: #64748b; border: none; background: transparent; font-family: 'Poppins', sans-serif; white-space: nowrap; }
+        .filter-tab.active { background: #fff; color: #0f172a; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+        .filter-tab:hover:not(.active) { color: #0f172a; }
+
+        /* ── Show rows ── */
+        .show-rows-select { padding: 4px 8px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 11px; font-family: 'Poppins', sans-serif; color: #0f172a; background: #f8fafc; outline: none; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -530,7 +535,7 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
                         <div style="flex:1;min-width:0;">
                             <p class="stat-label">Total Obligated</p>
-                            <p class="stat-value" style="font-size:20px;">₱<?= number_format($totalObligated,2) ?></p>
+                            <p class="stat-value" style="font-size:20px;">&#8369;<?= number_format($totalObligated,2) ?></p>
                             <div class="stat-meta">
                                 <div class="progress-bar">
                                     <div class="progress-fill" style="width:<?= $utilRate ?>%;background:linear-gradient(90deg,#2563eb,#60a5fa);"></div>
@@ -550,7 +555,7 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
                         <div style="flex:1;min-width:0;">
                             <p class="stat-label">Unobligated</p>
-                            <p class="stat-value" style="color:#b45309;font-size:20px;">₱<?= number_format($unobligated,2) ?></p>
+                            <p class="stat-value" style="color:#b45309;font-size:20px;">&#8369;<?= number_format($unobligated,2) ?></p>
                             <div class="stat-meta">
                                 <div class="progress-bar">
                                     <div class="progress-fill" style="width:<?= 100-$utilRate ?>%;background:linear-gradient(90deg,#f59e0b,#fcd34d);"></div>
@@ -589,14 +594,14 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                                 <span style="width:10px;height:10px;border-radius:3px;background:#2563eb;flex-shrink:0;display:inline-block;"></span>
                                 <span style="font-size:12px;color:#64748b;font-weight:500;">Obligated</span>
                             </div>
-                            <span style="font-size:12px;font-weight:700;color:#0f172a;">₱<?= number_format($totalObligated,2) ?></span>
+                            <span style="font-size:12px;font-weight:700;color:#0f172a;">&#8369;<?= number_format($totalObligated,2) ?></span>
                         </div>
                         <div style="display:flex;align-items:center;justify-content:space-between;">
                             <div style="display:flex;align-items:center;gap:8px;">
                                 <span style="width:10px;height:10px;border-radius:3px;background:#e2e8f0;flex-shrink:0;display:inline-block;"></span>
                                 <span style="font-size:12px;color:#64748b;font-weight:500;">Unobligated</span>
                             </div>
-                            <span style="font-size:12px;font-weight:700;color:#0f172a;">₱<?= number_format($unobligated,2) ?></span>
+                            <span style="font-size:12px;font-weight:700;color:#0f172a;">&#8369;<?= number_format($unobligated,2) ?></span>
                         </div>
                     </div>
                 </div>
@@ -648,15 +653,17 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                             <p style="font-size:10px;color:#94a3b8;font-weight:500;"><?= date('F Y') ?></p>
                         </div>
                     </div>
-                    <div style="display:flex;align-items:center;gap:10px;">
+                    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
                         <div class="search-wrap">
                             <svg class="search-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                            <input type="text" class="search-input" placeholder="Search SARO ID or amount…">
+                            <input type="text" class="search-input" placeholder="Search SARO ID or amount...">
                         </div>
-                        <button class="tb-btn">
-                            <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>
-                            Filter
-                        </button>
+                        <div class="filter-tabs">
+                            <button class="filter-tab active">All</button>
+                            <button class="filter-tab">Active</button>
+                            <button class="filter-tab">Obligated</button>
+                            <button class="filter-tab">Lapsed</button>
+                        </div>
                         <button class="tb-btn tb-btn-primary" onclick="printObligatedSaros()">
                             <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 2H14l4 4v14a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2zm8 0v4h4"/></svg>
                             Print
@@ -694,20 +701,21 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
                                 else                { $burColor = '#dc2626'; $burBg = 'linear-gradient(90deg,#ef4444,#fca5a5)'; $burLabel = 'Red — Low Utilization'; }
                                 if ($s['status'] === 'active')          $badgeClass = 'badge-green';
                                 elseif ($s['status'] === 'obligated')   $badgeClass = 'badge-blue';
+                                elseif ($s['status'] === 'lapsed')      $badgeClass = 'badge-amber';
                                 else                                    $badgeClass = 'badge-red';
                             ?>
-                            <tr>
+                            <tr data-status="<?= htmlspecialchars($s['status']) ?>">
                                 <td style="color:#cbd5e1;font-weight:700;font-size:12px;"><?= str_pad($i+1,2,'0',STR_PAD_LEFT) ?></td>
                                 <td>
                                     <span style="font-weight:700;color:#0f172a;font-size:13px;"><?= htmlspecialchars($s['saroNo']) ?></span>
                                 </td>
-                                <td style="text-align:right;font-weight:600;color:#334155;">₱<?= number_format($s['total_budget'],2) ?></td>
+                                <td style="text-align:right;font-weight:600;color:#334155;">&#8369;<?= number_format($s['total_budget'],2) ?></td>
                                 <td style="text-align:right;">
-                                    <p style="font-weight:700;color:#1d4ed8;font-size:12px;margin-bottom:1px;">₱<?= number_format($s['obligated'],2) ?></p>
+                                    <p style="font-weight:700;color:#1d4ed8;font-size:12px;margin-bottom:1px;">&#8369;<?= number_format($s['obligated'],2) ?></p>
                                     <p style="font-size:10px;color:#60a5fa;font-weight:600;"><?= $bur ?>% of budget</p>
                                 </td>
                                 <td style="text-align:right;">
-                                    <p style="font-weight:700;color:#b45309;font-size:12px;margin-bottom:1px;">₱<?= number_format($unoblig,2) ?></p>
+                                    <p style="font-weight:700;color:#b45309;font-size:12px;margin-bottom:1px;">&#8369;<?= number_format($unoblig,2) ?></p>
                                     <p style="font-size:10px;color:#d97706;font-weight:600;"><?= round(100-$bur,1) ?>% remaining</p>
                                 </td>
                                 <td style="text-align:center;">
@@ -737,16 +745,27 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
 
                 <!-- Panel footer -->
                 <div class="panel-footer">
-                    <p style="font-size:11px;color:#94a3b8;font-weight:500;">Displaying <strong style="color:#475569;"><?= count($saros) ?></strong> of <strong style="color:#475569;"><?= $totalSaros ?></strong> SARO entries</p>
+                    <div style="display:flex;align-items:center;gap:16px;">
+                        <p style="font-size:11px;color:#94a3b8;font-weight:500;">Displaying <strong id="row-count" style="color:#475569;"><?= count($saros) ?></strong> of <strong style="color:#475569;"><?= count($saros) ?></strong> SARO entries</p>
+                        <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#64748b;font-weight:500;">
+                            <span>Show</span>
+                            <select class="show-rows-select">
+                                <option value="10" selected>10 rows</option>
+                                <option value="20">20 rows</option>
+                                <option value="30">30 rows</option>
+                                <option value="50">50 rows</option>
+                            </select>
+                        </div>
+                    </div>
                     <div style="display:flex;align-items:center;gap:20px;">
                         <div style="text-align:right;">
                             <p style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px;">Total Allocation</p>
-                            <p style="font-size:15px;font-weight:900;color:#0f172a;letter-spacing:-0.02em;">₱<?= number_format($totalBudget,2) ?></p>
+                            <p style="font-size:15px;font-weight:900;color:#0f172a;letter-spacing:-0.02em;">&#8369;<?= number_format($totalBudget,2) ?></p>
                         </div>
                         <div style="width:1px;height:32px;background:#e2e8f0;"></div>
                         <div style="text-align:right;">
                             <p style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px;">Utilized Amount</p>
-                            <p style="font-size:15px;font-weight:900;color:#2563eb;letter-spacing:-0.02em;">₱<?= number_format($totalObligated,2) ?></p>
+                            <p style="font-size:15px;font-weight:900;color:#2563eb;letter-spacing:-0.02em;">&#8369;<?= number_format($totalObligated,2) ?></p>
                         </div>
                     </div>
                 </div>
@@ -772,14 +791,15 @@ $chartObligated = json_encode(array_map(fn($r) => (float)$r['obligated'], $saros
 <div id="print-area" style="display:none;"></div>
 
 <script>
-const saroData = <?= json_encode(array_values(array_filter($saros, fn($s) => $s['status'] === 'obligated'))) ?>;
+const saroData = <?= json_encode(array_values($saros)) ?>;
 
 function printObligatedSaros() {
+    const statusLabel = { active: 'Active', obligated: 'Obligated', lapsed: 'Lapsed' };
     const rows = saroData.map((s, i) => {
         const bur      = s.total_budget > 0 ? (s.obligated / s.total_budget * 100).toFixed(1) : '0.0';
         const unoblig  = (parseFloat(s.total_budget) - parseFloat(s.obligated)).toFixed(2);
         const burLabel = bur >= 80 ? 'High Utilization' : bur >= 50 ? 'Moderate' : 'Low Utilization';
-        const fmt      = n => '₱' + parseFloat(n).toLocaleString('en-PH', {minimumFractionDigits:2, maximumFractionDigits:2});
+        const fmt      = n => '\u20B1' + parseFloat(n).toLocaleString('en-PH', {minimumFractionDigits:2, maximumFractionDigits:2});
         return `<tr>
             <td>${String(i + 1).padStart(2, '0')}</td>
             <td>${s.saroNo}</td>
@@ -787,7 +807,7 @@ function printObligatedSaros() {
             <td class="amt">${fmt(s.obligated)}</td>
             <td class="amt">${fmt(unoblig)}</td>
             <td class="center">${bur}% — ${burLabel}</td>
-            <td class="center">Obligated</td>
+            <td class="center">${statusLabel[s.status] ?? s.status}</td>
         </tr>`;
     }).join('');
 
@@ -810,7 +830,7 @@ function printObligatedSaros() {
             #print-area .pf { margin-top: 16px; font-size: 10px; color: #555; text-align: right; }
         </style>
         <div class="ph">
-            <h1>Obligated SARO Records</h1>
+            <h1>SARO Records</h1>
             <p>DICT — Zamboanga-BASULTA Cluster &nbsp;|&nbsp; Printed: ${now}</p>
         </div>
         <table>
@@ -819,7 +839,7 @@ function printObligatedSaros() {
                 <th class="amt">Total Budget</th><th class="amt">Obligated</th>
                 <th class="amt">Unobligated</th><th class="center">BUR</th><th class="center">Status</th>
             </tr></thead>
-            <tbody>${rows || '<tr><td colspan="7" style="text-align:center;padding:20px;color:#888;">No obligated SAROs found.</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="7" style="text-align:center;padding:20px;color:#888;">No SARO records found.</td></tr>'}</tbody>
         </table>
         <div class="pf">Total records: ${saroData.length}</div>`;
 
@@ -853,7 +873,7 @@ function printObligatedSaros() {
                 legend: { display: false },
                 tooltip: {
                     callbacks: {
-                        label: ctx => ' ₱' + (ctx.raw / 1000000).toFixed(2) + 'M'
+                        label: ctx => ' \u20B1' + (ctx.raw / 1000000).toFixed(2) + 'M'
                     }
                 }
             }
@@ -889,7 +909,7 @@ function printObligatedSaros() {
                 legend: { display: false },
                 tooltip: {
                     callbacks: {
-                        label: ctx => ' ₱' + ctx.raw.toLocaleString()
+                        label: ctx => ' \u20B1' + ctx.raw.toLocaleString()
                     }
                 }
             },
@@ -904,7 +924,7 @@ function printObligatedSaros() {
                     ticks: {
                         color: '#94a3b8',
                         font: { weight: '600' },
-                        callback: v => '₱' + Number(v).toLocaleString('en-US')
+                        callback: v => '\u20B1' + Number(v).toLocaleString('en-US')
                     },
                     border: { display: false }
                 }
@@ -912,6 +932,64 @@ function printObligatedSaros() {
         }
     });
 </script>
-<script src="../assets/js/table_controls.js"></script>
+<script>
+(function () {
+    const panel       = document.querySelector('.table-panel');
+    if (!panel) return;
+
+    const tbody       = panel.querySelector('tbody');
+    const allRows     = Array.from(tbody.querySelectorAll('tr[data-status]'));
+    const emptyRow    = tbody.querySelector('tr td[colspan]')
+                            ? tbody.querySelector('tr td[colspan]').closest('tr') : null;
+    const searchInput = panel.querySelector('.search-input');
+    const rowsSel     = panel.querySelector('.show-rows-select');
+    const filterTabs  = panel.querySelectorAll('.filter-tab');
+    const countEl     = document.getElementById('row-count');
+
+    let activeStatus = 'all';
+
+    function applyFilters() {
+        const q     = searchInput ? searchInput.value.trim().toLowerCase() : '';
+        const limit = rowsSel ? (parseInt(rowsSel.value, 10) || 10) : 10;
+
+        let shown = 0, matched = 0;
+
+        allRows.forEach(row => {
+            const statusOk = activeStatus === 'all' || row.dataset.status === activeStatus;
+            const searchOk = !q || row.textContent.toLowerCase().includes(q);
+            const isMatch  = statusOk && searchOk;
+
+            if (isMatch) matched++;
+
+            const show = isMatch && shown < limit;
+            row.style.display = show ? '' : 'none';
+            if (show) shown++;
+        });
+
+        if (emptyRow) emptyRow.style.display = matched === 0 ? '' : 'none';
+        if (countEl)  countEl.textContent = shown;
+    }
+
+    // Filter tabs
+    filterTabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            filterTabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            activeStatus = tab.textContent.trim().toLowerCase();
+            if (activeStatus === 'all') activeStatus = 'all';
+            applyFilters();
+        });
+    });
+
+    // Search
+    if (searchInput) searchInput.addEventListener('input', applyFilters);
+
+    // Show rows
+    if (rowsSel) rowsSel.addEventListener('change', applyFilters);
+
+    // Initial apply
+    applyFilters();
+})();
+</script>
 </body>
 </html>

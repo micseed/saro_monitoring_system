@@ -30,6 +30,11 @@
             return /password|request|approve|reject|account|role|user\b|admin/i.test(rowText);
         }
 
+        // Status-based tabs (active, obligated, lapsed, cancelled, etc.)
+        if (/^(active|obligated|lapsed|cancelled)$/.test(t)) {
+            return new RegExp('\\b' + t + '\\b', 'i').test(rowText);
+        }
+
         return true;
     }
 

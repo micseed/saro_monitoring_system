@@ -2,7 +2,7 @@
 // admin/dashboard.php
 require_once __DIR__ . '/../includes/auth.php'; 
 require_once __DIR__ . '/../class/database.php'; // This includes your Database class
-require_once __DIR__ . '/../class/super_admin.php';
+require_once __DIR__ . '/../class/system_admin.php';
 
 // 1. Initialize your Database class
 $db = new Database();
@@ -10,13 +10,13 @@ $db = new Database();
 // 2. Call your connect() method to get the PDO connection
 $pdo = $db->connect();
 
-// 3. Now pass that valid PDO connection to the SuperAdmin class
-$admin = new SuperAdmin($pdo);
+// 3. Now pass that valid PDO connection to the SystemAdmin class
+$admin = new SystemAdmin($pdo);
 
 // Fetch dynamic dashboard data
 $stats = $admin->getDashboardStats();
-$recentUsers = $admin->getRecentUsers(4);
-$pendingRequests = $admin->getPendingRequests(4);
+$recentUsers = $admin->getRecentUsers(50);
+$pendingRequests = $admin->getPendingRequests(50);
 $saroChartData = $admin->getSaroChartData(5);
 
 // Session details
@@ -76,14 +76,13 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
         .signout-btn:hover { background: rgba(239,68,68,0.12); color: #fca5a5; }
 
         /* ── Main ── */
-        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
         .topbar { height: 64px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; background: #fff; border-bottom: 1px solid #e8edf5; }
         .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #64748b; }
         .breadcrumb-active { color: #0f172a; }
         .topbar-right { display: flex; align-items: center; gap: 16px; }
         .icon-btn { width: 36px; height: 36px; border-radius: 9px; background: #f8fafc; border: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; transition: all 0.2s ease; position: relative; }
         .icon-btn:hover { border-color: #ef4444; color: #dc2626; background: #fef2f2; }
-        .notif-dot { position: absolute; top: 7px; right: 7px; width: 7px; height: 7px; background: #ef4444; border-radius: 50%; border: 1.5px solid #fff; }
         .content { flex: 1; overflow-y: auto; padding: 28px 32px; }
 
         /* ── Hero ── */
@@ -150,6 +149,10 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
 
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+        /* ── Show rows ── */
+        .show-rows-wrap { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #64748b; font-weight: 500; }
+        .show-rows-select { padding: 4px 8px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 11px; font-family: 'Poppins', sans-serif; color: #0f172a; background: #f8fafc; outline: none; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -194,6 +197,11 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
             <a href="activity_logs.php" class="nav-item">
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
+            </a>
+            <p class="nav-section-label">Reports</p>
+            <a href="export_records.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                Export Records
             </a>
         </nav>
 
@@ -341,11 +349,11 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                     <div style="display:flex;flex-direction:column;gap:10px;">
                         <div style="display:flex;align-items:center;justify-content:space-between;">
                             <div style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:3px;background:#dc2626;display:inline-block;"></span><span style="font-size:12px;color:#64748b;font-weight:500;">Obligated</span></div>
-                            <span style="font-size:12px;font-weight:700;color:#0f172a;">₱<?= number_format($stats['total_obligated'], 2) ?></span>
+                            <span style="font-size:12px;font-weight:700;color:#0f172a;">&#8369;<?= number_format($stats['total_obligated'], 2) ?></span>
                         </div>
                         <div style="display:flex;align-items:center;justify-content:space-between;">
                             <div style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:3px;background:#e2e8f0;display:inline-block;"></span><span style="font-size:12px;color:#64748b;font-weight:500;">Unobligated</span></div>
-                            <span style="font-size:12px;font-weight:700;color:#0f172a;">₱<?= number_format($stats['unobligated'], 2) ?></span>
+                            <span style="font-size:12px;font-weight:700;color:#0f172a;">&#8369;<?= number_format($stats['unobligated'], 2) ?></span>
                         </div>
                     </div>
                 </div>
@@ -397,7 +405,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                                         $userInitials = $admin->getInitials($u['first_name'], $u['last_name']); 
                                         $fullName = htmlspecialchars($u['first_name'] . ' ' . $u['last_name']);
                                     ?>
-                                    <tr>
+                                    <tr class="dash-user-row">
                                         <td>
                                             <div style="display:flex;align-items:center;gap:9px;">
                                                 <span class="u-avatar" style="background:linear-gradient(135deg,#2563eb,#1d4ed8);"><?= $userInitials ?></span>
@@ -425,11 +433,17 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                         </table>
                     </div>
                     <div class="panel-footer">
-                        <p style="font-size:11px;color:#94a3b8;font-weight:500;"><?= $stats['total_users'] ?> total accounts</p>
-                        <a href="users.php" class="btn btn-primary btn-sm">
-                            <svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                            Create Account
-                        </a>
+                        <div class="show-rows-wrap">
+                            <span>Show</span>
+                            <select class="show-rows-select" id="dashUserRows">
+                                <option value="10" selected>10</option>
+                                <option value="20">20</option>
+                                <option value="30">30</option>
+                                <option value="40">40</option>
+                                <option value="50">50</option>
+                            </select>
+                        </div>
+                        <p style="font-size:11px;color:#94a3b8;font-weight:500;">Displaying <strong style="color:#475569;" id="dash-user-count">10</strong> of <strong style="color:#475569;"><?= $stats['total_users'] ?></strong> accounts</p>
                     </div>
                 </div>
 
@@ -449,7 +463,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                     </div>
 
                     <!-- Request list items -->
-                    <div>
+                    <div style="flex:1; overflow-y:auto; min-height:0;">
                         <?php if(empty($pendingRequests)): ?>
                             <p style="padding: 14px 22px; font-size:12px; color:#94a3b8;">No pending requests.</p>
                         <?php else: ?>
@@ -459,7 +473,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                                     $reqName = htmlspecialchars($req['first_name'] . ' ' . $req['last_name']);
                                     $date = date('M d, Y', strtotime($req['requested_at']));
                                 ?>
-                                <div style="padding:14px 22px;border-bottom:1px solid #f8fafc;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                                <div class="dash-req-item" style="padding:14px 22px;border-bottom:1px solid #f8fafc;display:flex;align-items:center;justify-content:space-between;gap:12px;">
                                     <div style="display:flex;align-items:center;gap:10px;">
                                         <span class="u-avatar" style="background:linear-gradient(135deg,#16a34a,#15803d);"><?= $reqInitials ?></span>
                                         <div>
@@ -478,14 +492,17 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                     </div>
 
                     <div class="panel-footer">
-                        <p style="font-size:11px;color:#94a3b8;font-weight:500;">
-                            <?php if($stats['pending_requests'] > 0): ?>
-                                <strong style="color:#dc2626;"><?= $stats['pending_requests'] ?> pending</strong>
-                            <?php else: ?>
-                                All caught up!
-                            <?php endif; ?>
-                        </p>
-                        <a href="password_requests.php" class="btn btn-ghost btn-sm">Manage All →</a>
+                        <div class="show-rows-wrap">
+                            <span>Show</span>
+                            <select class="show-rows-select" id="dashReqRows">
+                                <option value="10" selected>10</option>
+                                <option value="20">20</option>
+                                <option value="30">30</option>
+                                <option value="40">40</option>
+                                <option value="50">50</option>
+                            </select>
+                        </div>
+                        <p style="font-size:11px;color:#94a3b8;font-weight:500;">Displaying <strong style="color:#475569;" id="dash-req-count">10</strong> of <strong style="color:#dc2626;"><?= $stats['pending_requests'] ?></strong> pending</p>
                     </div>
                 </div>
 
@@ -512,7 +529,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
             cutout: '72%',
             plugins: {
                 legend: { display: false },
-                tooltip: { callbacks: { label: ctx => ' ₱' + ctx.raw.toLocaleString() } }
+                tooltip: { callbacks: { label: ctx => ' \u20B1' + ctx.raw.toLocaleString() } }
             }
         }
     });
@@ -533,10 +550,10 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
             },
             options: {
                 responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ' ₱' + ctx.raw.toLocaleString() } } },
+                plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ' \u20B1' + ctx.raw.toLocaleString() } } },
                 scales: {
                     x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { weight: '600' } }, border: { display: false } },
-                    y: { grid: { color: '#f1f5f9' }, ticks: { color: '#94a3b8', font: { weight: '600' }, callback: v => '₱' + v.toLocaleString() }, border: { display: false } }
+                    y: { grid: { color: '#f1f5f9' }, ticks: { color: '#94a3b8', font: { weight: '600' }, callback: v => '\u20B1' + v.toLocaleString() }, border: { display: false } }
                 }
             }
         });
@@ -546,6 +563,44 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
         barCtx.insertAdjacentHTML('afterend', '<div style="height:180px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;"><svg width="32" height="32" fill="none" stroke="#cbd5e1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg><p style="font-size:12px;color:#94a3b8;font-weight:600;">No SARO data available</p></div>');
     }
 </script>
-<script src="../assets/js/table_controls.js"></script>
+<script>
+(function () {
+    var userRows = Array.from(document.querySelectorAll('.dash-user-row'));
+    var userSel  = document.getElementById('dashUserRows');
+    var userCnt  = document.getElementById('dash-user-count');
+
+    function applyUsers() {
+        var limit = userSel ? (parseInt(userSel.value, 10) || 10) : 10;
+        var shown = 0;
+        userRows.forEach(function (row) {
+            var show = shown < limit;
+            row.style.display = show ? '' : 'none';
+            if (show) shown++;
+        });
+        if (userCnt) userCnt.textContent = shown;
+    }
+
+    if (userSel) userSel.addEventListener('change', applyUsers);
+    applyUsers();
+
+    var reqItems = Array.from(document.querySelectorAll('.dash-req-item'));
+    var reqSel   = document.getElementById('dashReqRows');
+    var reqCnt   = document.getElementById('dash-req-count');
+
+    function applyReqs() {
+        var limit = reqSel ? (parseInt(reqSel.value, 10) || 10) : 10;
+        var shown = 0;
+        reqItems.forEach(function (item) {
+            var show = shown < limit;
+            item.style.display = show ? '' : 'none';
+            if (show) shown++;
+        });
+        if (reqCnt) reqCnt.textContent = shown;
+    }
+
+    if (reqSel) reqSel.addEventListener('change', applyReqs);
+    applyReqs();
+})();
+</script>
 </body>
 </html>

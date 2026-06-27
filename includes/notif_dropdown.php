@@ -153,12 +153,6 @@ $handlerUrl = preg_replace('#/(saro|admin)$#', '', $handlerUrl) . '/includes/not
 .nf-footer:hover { background:#fef2f2; }
 <?php endif; ?>
 
-/* Unread dot (fallback when no count) */
-.nf-dot {
-    position:absolute;top:7px;right:7px;
-    width:7px;height:7px;background:#ef4444;
-    border-radius:50%;border:1.5px solid #fff;
-}
 </style>
 
 <div style="position:relative;" id="notifWrap">
@@ -170,8 +164,6 @@ $handlerUrl = preg_replace('#/(saro|admin)$#', '', $handlerUrl) . '/includes/not
         </svg>
         <?php if ($totalBadge > 0): ?>
         <span class="nf-badge" id="nfBadge"><?= min($totalBadge, 99) ?></span>
-        <?php else: ?>
-        <span class="nf-dot" id="nfDot"></span>
         <?php endif; ?>
     </button>
 
@@ -260,7 +252,7 @@ $handlerUrl = preg_replace('#/(saro|admin)$#', '', $handlerUrl) . '/includes/not
                 ];
                 $ic = $iconMap[$n['action']] ?? ['bg' => '#dbeafe', 'clr' => '#2563eb', 'lbl' => '·'];
             ?>
-            <div class="nf-row <?= $isRead ? '' : 'nf-unread' ?>" id="nfRow-<?= $logId ?>" style="cursor:pointer;" onclick="window.location='<?= htmlspecialchars($link) ?>'">
+            <div class="nf-row <?= $isRead ? '' : 'nf-unread' ?>" id="nfRow-<?= $logId ?>" style="cursor:pointer;" onclick="nfGo(event, <?= $logId ?>, '<?= htmlspecialchars(addslashes($link)) ?>')">
                 <div class="nf-icon" style="background:<?= $ic['bg'] ?>;">
                     <span style="font-size:13px;font-weight:900;color:<?= $ic['clr'] ?>;"><?= $ic['lbl'] ?></span>
                 </div>
@@ -297,16 +289,14 @@ $handlerUrl = preg_replace('#/(saro|admin)$#', '', $handlerUrl) . '/includes/not
         dd.style.display = nfOpen ? 'block' : 'none';
 
         if (nfOpen) {
-            /* Fade badge immediately when opening */
+            /* Fade badge immediately when opening (visually only) */
             const badge = document.getElementById('nfBadge');
             const pill  = document.getElementById('nfCountPill');
-            const dot   = document.getElementById('nfDot');
             if (badge) {
                 badge.classList.add('fade-out');
-                setTimeout(() => badge.remove(), 320);
+                setTimeout(() => badge.style.display = 'none', 320);
             }
             if (pill)  { setTimeout(() => pill.style.display='none', 300); }
-            if (dot)   dot.style.opacity = '0.3';
 
             /* Persist "seen" to DB so badge stays gone after page navigation */
             fetch(HANDLER, {
@@ -351,6 +341,18 @@ $handlerUrl = preg_replace('#/(saro|admin)$#', '', $handlerUrl) . '/includes/not
             const btn = document.getElementById('nfMarkAll');
             if (btn) btn.style.opacity = '0.35';
         }).catch(console.error);
+    };
+
+    /* Click and navigate (marks as read) */
+    window.nfGo = function(e, logId, link) {
+        if (e.target.closest('.nf-dismiss')) return; // handled by nfDismiss
+        fetch(HANDLER, {
+            method: 'POST',
+            headers: {'Content-Type':'application/x-www-form-urlencoded'},
+            body: 'action=mark_read&logId=' + logId
+        }).finally(() => {
+            window.location = link;
+        });
     };
 
     /* Dismiss single notification */

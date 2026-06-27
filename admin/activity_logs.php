@@ -23,6 +23,7 @@ $allUsers = $pdo->query("
     SELECT u.userId, u.first_name, u.last_name, u.status, u.last_login, ur.role
     FROM user u
     JOIN user_role ur ON ur.roleId = u.roleId
+    WHERE LOWER(ur.role) NOT LIKE '%system%'
     ORDER BY u.first_name ASC
 ")->fetchAll();
 
@@ -31,6 +32,8 @@ $logs = $pdo->query("
     SELECT a.*, u.first_name, u.last_name
     FROM audit_logs a
     LEFT JOIN user u ON a.userId = u.userId
+    LEFT JOIN user_role ur ON u.roleId = ur.roleId
+    WHERE LOWER(ur.role) NOT LIKE '%system%' OR ur.role IS NULL
     ORDER BY a.created_at DESC
     LIMIT 100
 ")->fetchAll();
@@ -90,14 +93,13 @@ $pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHER
         .signout-btn:hover { background: rgba(239,68,68,0.12); color: #fca5a5; }
 
         /* ── Main ── */
-        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
         .topbar { height: 64px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; background: #fff; border-bottom: 1px solid #e8edf5; }
         .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #64748b; }
         .breadcrumb-active { color: #0f172a; }
         .topbar-right { display: flex; align-items: center; gap: 16px; }
         .icon-btn { width: 36px; height: 36px; border-radius: 9px; background: #f8fafc; border: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; transition: all 0.2s ease; position: relative; }
         .icon-btn:hover { border-color: #ef4444; color: #dc2626; background: #fef2f2; }
-        .notif-dot { position: absolute; top: 7px; right: 7px; width: 7px; height: 7px; background: #ef4444; border-radius: 50%; border: 1.5px solid #fff; }
         .content { flex: 1; overflow-y: auto; padding: 28px 32px; }
 
         /* ── Hero ── */
@@ -124,7 +126,7 @@ $pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHER
         .filter-tab:hover:not(.active) { color: #0f172a; }
 
         /* ── Panels grid ── */
-        .panels-grid { display: grid; grid-template-columns: 1fr 1.55fr; gap: 20px; align-items: start; }
+        .panels-grid { display: flex; flex-direction: column; gap: 20px; }
 
         /* ── Table panel ── */
         .table-panel { background: #fff; border: 1px solid #e8edf5; border-radius: 16px; overflow: hidden; display: flex; flex-direction: column; }
@@ -217,6 +219,11 @@ $pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHER
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity Logs
             </a>
+            <p class="nav-section-label">Reports</p>
+            <a href="export_records.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                Export Records
+            </a>
 
         </nav>
 
@@ -306,9 +313,14 @@ $pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHER
                             </div>
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;">
+                            <div class="filter-tabs" id="userFilterTabs">
+                                <button type="button" class="filter-tab active" data-filter="all">All</button>
+                                <button type="button" class="filter-tab" data-filter="active">Active</button>
+                                <button type="button" class="filter-tab" data-filter="inactive">Inactive</button>
+                            </div>
                             <div class="search-wrap">
                                 <svg class="search-icon" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                                <input type="text" class="search-input" placeholder="Search users…">
+                                <input type="text" class="search-input" id="userSearch" placeholder="Search users...">
                             </div>
                         </div>
                     </div>
@@ -334,11 +346,11 @@ $pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHER
                                             ? 'Last active today'
                                             : 'Last active ' . date('M d', strtotime($u['last_login']));
                                     }
-                                    $roleClass  = strpos(strtolower($u['role']), 'super') !== false ? 'role-admin' : 'role-admin';
+                                    $roleClass  = strpos(strtolower($u['role']), 'system') !== false ? 'role-admin' : 'role-admin';
                                     $statusCls  = $u['status'] === 'active' ? 'badge-green' : 'badge-red';
                                     $statusLabel = ucfirst($u['status']);
                                 ?>
-                                <tr>
+                                <tr class="user-row" data-status="<?= htmlspecialchars($u['status']) ?>">
                                     <td>
                                         <div style="display:flex;align-items:center;gap:9px;">
                                             <span class="u-avatar" style="background:linear-gradient(135deg,#2563eb,#1d4ed8);"><?= htmlspecialchars($fI . $lI) ?></span>
@@ -359,13 +371,16 @@ $pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHER
                     <div class="panel-footer">
                         <div class="show-rows-wrap">
                             <span>Show</span>
-                            <select class="show-rows-select">
-                                <option>10 rows</option>
-                                <option selected>20 rows</option>
-                                <option>50 rows</option>
+                            <select class="show-rows-select" id="userRows">
+                                <option value="10" selected>10</option>
+                                <option value="20">20</option>
+                                <option value="50">50</option>
                             </select>
+                            rows
                         </div>
-                        <p style="font-size:11px;color:#94a3b8;font-weight:500;"><?= $totalUsers ?> user<?= $totalUsers !== 1 ? 's' : '' ?></p>
+                        <p style="font-size:11px;color:#94a3b8;font-weight:500;">
+                            Displaying <strong id="user-count" style="color:#475569;"><?= $totalUsers ?></strong> of <strong style="color:#475569;"><?= $totalUsers ?></strong> user<?= $totalUsers !== 1 ? 's' : '' ?>
+                        </p>
                     </div>
                 </div>
 
@@ -382,15 +397,15 @@ $pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHER
                             </div>
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;">
-                            <div class="filter-tabs">
-                                <button type="button" class="filter-tab active">All</button>
-                                <button type="button" class="filter-tab">Login</button>
-                                <button type="button" class="filter-tab">Changes</button>
-                                <button type="button" class="filter-tab">Admin</button>
+                            <div class="filter-tabs" id="logFilterTabs">
+                                <button type="button" class="filter-tab active" data-filter="all">All</button>
+                                <button type="button" class="filter-tab" data-filter="login">Login</button>
+                                <button type="button" class="filter-tab" data-filter="changes">Changes</button>
+                                <button type="button" class="filter-tab" data-filter="admin">Admin</button>
                             </div>
                             <div class="search-wrap">
                                 <svg class="search-icon" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                                <input type="text" class="search-input" placeholder="Search logs…">
+                                <input type="text" class="search-input" id="logSearch" placeholder="Search logs...">
                             </div>
                         </div>
                     </div>
@@ -425,8 +440,14 @@ $pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHER
                                     $avatarColors = ['#2563eb,#1d4ed8','#16a34a,#15803d','#dc2626,#b91c1c','#7c3aed,#6d28d9','#0891b2,#0e7490','#d97706,#b45309'];
                                     $colorIdx   = $actorFirst ? (crc32($actorFirst . $actorLast) % count($avatarColors)) : 0;
                                     $avatarColor = $avatarColors[abs($colorIdx)];
+                                    $logCat = match(strtolower($action)) {
+                                        'login', 'logout' => 'login',
+                                        'create', 'edit', 'delete', 'cancelled' => 'changes',
+                                        'approve', 'reject' => 'admin',
+                                        default => 'other',
+                                    };
                                 ?>
-                                <tr>
+                                <tr class="log-row" data-category="<?= $logCat ?>">
                                     <td>
                                         <p style="font-size:11px;font-weight:700;color:#0f172a;"><?= $logDate ?></p>
                                         <p style="font-size:10px;color:#94a3b8;font-weight:500;"><?= $logTime ?></p>
@@ -455,14 +476,15 @@ $pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHER
                     <div class="panel-footer">
                         <div class="show-rows-wrap">
                             <span>Show</span>
-                            <select class="show-rows-select">
-                                <option>10 rows</option>
-                                <option selected>20 rows</option>
-                                <option>50 rows</option>
+                            <select class="show-rows-select" id="logRows">
+                                <option value="10" selected>10</option>
+                                <option value="20">20</option>
+                                <option value="50">50</option>
                             </select>
+                            rows
                         </div>
                         <p style="font-size:11px;color:#94a3b8;font-weight:500;">
-                            Displaying <strong style="color:#475569;"><?= count($logs) ?></strong> of <strong style="color:#475569;"><?= $totalLogs ?></strong> entries
+                            Displaying <strong id="log-count" style="color:#475569;"><?= count($logs) ?></strong> of <strong style="color:#475569;"><?= $totalLogs ?></strong> entries
                         </p>
                     </div>
                 </div>
@@ -472,6 +494,82 @@ $pendingReqCount = (int)$pdo->query("SELECT COUNT(*) FROM password_requests WHER
     </main>
 </div>
 
-<script src="../assets/js/table_controls.js"></script>
+<script>
+(function () {
+    // ── Users panel ────────────────────────────────────────────────
+    (function () {
+        const allRows  = Array.from(document.querySelectorAll('.user-row'));
+        const searchEl = document.getElementById('userSearch');
+        const rowsSel  = document.getElementById('userRows');
+        const countEl  = document.getElementById('user-count');
+        const tabs     = document.querySelectorAll('#userFilterTabs .filter-tab');
+        let activeFilter = 'all';
+
+        function apply() {
+            const q     = searchEl ? searchEl.value.trim().toLowerCase() : '';
+            const limit = rowsSel ? (parseInt(rowsSel.value, 10) || 10) : 10;
+            let shown = 0;
+            allRows.forEach(function (row) {
+                const statusMatch = activeFilter === 'all' || row.dataset.status === activeFilter;
+                const searchMatch = !q || row.textContent.toLowerCase().includes(q);
+                const show = statusMatch && searchMatch && shown < limit;
+                row.style.display = show ? '' : 'none';
+                if (show) shown++;
+            });
+            if (countEl) countEl.textContent = shown;
+        }
+
+        tabs.forEach(function (tab) {
+            tab.addEventListener('click', function () {
+                tabs.forEach(function (t) { t.classList.remove('active'); });
+                tab.classList.add('active');
+                activeFilter = tab.dataset.filter;
+                apply();
+            });
+        });
+
+        if (searchEl) searchEl.addEventListener('input', apply);
+        if (rowsSel)  rowsSel.addEventListener('change', apply);
+        apply();
+    })();
+
+    // ── Logs panel ─────────────────────────────────────────────────
+    (function () {
+        const allRows  = Array.from(document.querySelectorAll('.log-row'));
+        const searchEl = document.getElementById('logSearch');
+        const rowsSel  = document.getElementById('logRows');
+        const countEl  = document.getElementById('log-count');
+        const tabs     = document.querySelectorAll('#logFilterTabs .filter-tab');
+        let activeFilter = 'all';
+
+        function apply() {
+            const q     = searchEl ? searchEl.value.trim().toLowerCase() : '';
+            const limit = rowsSel ? (parseInt(rowsSel.value, 10) || 10) : 10;
+            let shown = 0;
+            allRows.forEach(function (row) {
+                const catMatch    = activeFilter === 'all' || row.dataset.category === activeFilter;
+                const searchMatch = !q || row.textContent.toLowerCase().includes(q);
+                const show = catMatch && searchMatch && shown < limit;
+                row.style.display = show ? '' : 'none';
+                if (show) shown++;
+            });
+            if (countEl) countEl.textContent = shown;
+        }
+
+        tabs.forEach(function (tab) {
+            tab.addEventListener('click', function () {
+                tabs.forEach(function (t) { t.classList.remove('active'); });
+                tab.classList.add('active');
+                activeFilter = tab.dataset.filter;
+                apply();
+            });
+        });
+
+        if (searchEl) searchEl.addEventListener('input', apply);
+        if (rowsSel)  rowsSel.addEventListener('change', apply);
+        apply();
+    })();
+})();
+</script>
 </body>
 </html>

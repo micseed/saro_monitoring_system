@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -150,6 +150,46 @@ if (!empty($_POST['ajax_action'])) {
         exit;
     }
 
+    if ($action === 'approve_all') {
+        $procId = (int)($_POST['procurementId'] ?? 0);
+        if (!$procId) { echo json_encode(['success' => false, 'error' => 'Missing procurementId']); exit; }
+        if (!$saroActiveForProc($conn, $procId)) {
+            echo json_encode(['success' => false, 'error' => 'This SARO is not active.']);
+            exit;
+        }
+        if (!$canManageProcurement($conn, $procId, $userId)) {
+            echo json_encode(['success' => false, 'error' => 'View-only mode: you do not have permission.']);
+            exit;
+        }
+
+        $ps = $conn->prepare("SELECT o.is_travelExpense FROM procurement p JOIN object_code o ON p.objectId = o.objectId WHERE p.procurementId = ?");
+        $ps->execute([$procId]);
+        $isTravel = (bool)$ps->fetchColumn();
+
+        $docField = $isTravel ? 'applies_to_travel' : 'applies_to_regular';
+        $conn->prepare("
+            INSERT INTO proc_documents (procurementId, documentId, status)
+            SELECT ?, documentId, 'waived' FROM required_documents WHERE $docField=1
+            ON DUPLICATE KEY UPDATE status='waived'
+        ")->execute([$procId]);
+
+        if (!$isTravel) {
+            $conn->prepare("
+                INSERT INTO proc_signatures (procurementId, signId, status)
+                SELECT ?, signId, 'waived' FROM signatory_role WHERE applies_to_regular=1
+                ON DUPLICATE KEY UPDATE status='waived'
+            ")->execute([$procId]);
+        }
+
+        $conn->prepare("UPDATE procurement SET status='obligated' WHERE procurementId=?")->execute([$procId]);
+        
+        $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+        $conn->prepare("INSERT INTO audit_logs (userId, action, details, affected_table, record_id, ip_address) VALUES (?, 'update', 'Approved all documents/signatures', 'procurement', ?, ?)")->execute([$userId, $procId, $ip]);
+
+        echo json_encode(['success' => true]);
+        exit;
+    }
+
     echo json_encode(['success' => false, 'error' => 'Unknown action']);
     exit;
 }
@@ -291,14 +331,13 @@ foreach ($procurements as $p) {
         }
         .signout-btn:hover { background: rgba(239,68,68,0.12); color: #fca5a5; }
 
-        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
         .topbar { height: 64px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; background: #fff; border-bottom: 1px solid #e8edf5; }
         .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #64748b; }
         .breadcrumb-active { color: #0f172a; }
         .topbar-right { display: flex; align-items: center; gap: 16px; }
         .icon-btn { width: 36px; height: 36px; border-radius: 9px; background: #f8fafc; border: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; transition: all 0.2s ease; position: relative; }
         .icon-btn:hover { border-color: #3b82f6; color: #2563eb; background: #eff6ff; }
-        .notif-dot { position: absolute; top: 7px; right: 7px; width: 7px; height: 7px; background: #ef4444; border-radius: 50%; border: 1.5px solid #fff; }
         .content { flex: 1; overflow-y: auto; padding: 28px 32px; }
 
         .saro-card { background: #fff; border: 1px solid #e8edf5; border-radius: 14px; padding: 20px 28px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; gap: 24px; position: relative; overflow: hidden; }
@@ -463,7 +502,7 @@ foreach ($procurements as $p) {
                 </div>
                 <div style="flex-shrink:0;text-align:right;padding-left:24px;border-left:1px solid #e8edf5;position:relative;z-index:1;">
                     <p style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:3px;">Total Budget</p>
-                    <p style="font-size:20px;font-weight:900;color:#0f172a;letter-spacing:-0.02em;">₱<?= number_format($totalSaroBudget, 2) ?></p>
+                    <p style="font-size:20px;font-weight:900;color:#0f172a;letter-spacing:-0.02em;">&#8369;<?= number_format($totalSaroBudget, 2) ?></p>
                 </div>
             </div>
 
@@ -597,7 +636,7 @@ foreach ($procurements as $p) {
                                         <?php if ($isCancelled || $isObligated): ?>
                                             <span style="color:#94a3b8;">—</span>
                                         <?php else: ?>
-                                            <span style="font-weight:700;color:#d97706;font-size:12px;">₱<?= number_format($procBudget, 2) ?></span>
+                                            <span style="font-weight:700;color:#d97706;font-size:12px;">&#8369;<?= number_format($procBudget, 2) ?></span>
                                         <?php endif; ?>
                                     </td>
 
@@ -606,7 +645,7 @@ foreach ($procurements as $p) {
                                         <?php if ($isCancelled): ?>
                                             <span style="color:#94a3b8;">—</span>
                                         <?php elseif ($isObligated): ?>
-                                            <span style="font-weight:700;color:#16a34a;font-size:12px;">₱<?= number_format($procBudget, 2) ?></span>
+                                            <span style="font-weight:700;color:#16a34a;font-size:12px;">&#8369;<?= number_format($procBudget, 2) ?></span>
                                         <?php else: ?>
                                             <span style="color:#94a3b8;">—</span>
                                         <?php endif; ?>
@@ -625,13 +664,24 @@ foreach ($procurements as $p) {
                                         <?php elseif (!$canManageSaro): ?>
                                             <span style="font-size:10px;color:#cbd5e1;font-style:italic;">View only</span>
                                         <?php else: ?>
-                                            <button class="cancel-btn"
-                                                    data-proc-id="<?= (int)$p['procurementId'] ?>"
-                                                    data-proc-name="<?= htmlspecialchars(addslashes($p['pro_act'] ?? '')) ?>"
-                                                    title="Cancel Procurement Activity"
-                                                    style="width:28px;height:28px;border-radius:7px;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:all 0.2s ease;">
-                                                <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>
-                                            </button>
+                                            <div style="display:flex;align-items:center;justify-content:center;gap:6px;">
+                                                <?php if (!$isObligated): ?>
+                                                <button class="approve-all-btn"
+                                                        data-proc-id="<?= (int)$p['procurementId'] ?>"
+                                                        data-proc-name="<?= htmlspecialchars(addslashes($p['pro_act'] ?? '')) ?>"
+                                                        title="Check all documents and signatures"
+                                                        style="width:28px;height:28px;border-radius:7px;border:1px solid #bbf7d0;background:#dcfce7;color:#16a34a;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:all 0.2s ease;">
+                                                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+                                                </button>
+                                                <?php endif; ?>
+                                                <button class="cancel-btn"
+                                                        data-proc-id="<?= (int)$p['procurementId'] ?>"
+                                                        data-proc-name="<?= htmlspecialchars(addslashes($p['pro_act'] ?? '')) ?>"
+                                                        title="Cancel Procurement Activity"
+                                                        style="width:28px;height:28px;border-radius:7px;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:all 0.2s ease;">
+                                                    <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>
+                                                </button>
+                                            </div>
                                         <?php endif; ?>
                                     </td>
                                 </tr>
@@ -650,17 +700,17 @@ foreach ($procurements as $p) {
                     <div style="display:flex;align-items:center;justify-content:flex-end;gap:20px;padding-top:10px;border-top:1px solid #f1f5f9;">
                         <div style="text-align:right;">
                             <p style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px;">Total Obligated</p>
-                            <p id="footer-total-obligated" style="font-size:15px;font-weight:900;color:#1d4ed8;letter-spacing:-0.02em;">₱<?= number_format($totalObligatedAmount, 2) ?></p>
+                            <p id="footer-total-obligated" style="font-size:15px;font-weight:900;color:#1d4ed8;letter-spacing:-0.02em;">&#8369;<?= number_format($totalObligatedAmount, 2) ?></p>
                         </div>
                         <div style="width:1px;height:32px;background:#e2e8f0;"></div>
                         <div style="text-align:right;">
                             <p style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px;">Total Budget</p>
-                            <p style="font-size:15px;font-weight:900;color:#0f172a;letter-spacing:-0.02em;">₱<?= number_format($totalSaroBudget, 2) ?></p>
+                            <p style="font-size:15px;font-weight:900;color:#0f172a;letter-spacing:-0.02em;">&#8369;<?= number_format($totalSaroBudget, 2) ?></p>
                         </div>
                         <div style="width:1px;height:32px;background:#e2e8f0;"></div>
                         <div style="text-align:right;">
                             <p style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px;">Remaining Budget</p>
-                            <p id="footer-remaining" style="font-size:15px;font-weight:900;color:#16a34a;letter-spacing:-0.02em;">₱<?= number_format($totalSaroBudget - $totalObligatedAmount, 2) ?></p>
+                            <p id="footer-remaining" style="font-size:15px;font-weight:900;color:#16a34a;letter-spacing:-0.02em;">&#8369;<?= number_format($totalSaroBudget - $totalObligatedAmount, 2) ?></p>
                         </div>
                     </div>
                 </div>
@@ -704,6 +754,40 @@ foreach ($procurements as $p) {
     </div>
 </div>
 
+<!-- ══ Approve All Modal ══ -->
+<div id="approveModal" style="display:none;position:fixed;inset:0;z-index:100;
+     background:rgba(15,23,42,0.55);backdrop-filter:blur(4px);
+     align-items:center;justify-content:center;padding:24px;">
+    <div style="background:#fff;border-radius:18px;width:100%;max-width:400px;
+                box-shadow:0 24px 64px rgba(0,0,0,0.18);overflow:hidden;">
+        <div style="padding:22px 28px;border-bottom:1px solid #f1f5f9;
+                    display:flex;align-items:center;justify-content:space-between;
+                    background:linear-gradient(135deg,#16a34a,#22c55e);">
+            <div>
+                <p style="font-size:10px;font-weight:700;color:rgba(255,255,255,0.5);
+                           text-transform:uppercase;letter-spacing:0.14em;margin-bottom:4px;">Confirmation</p>
+                <h3 style="font-size:16px;font-weight:900;color:#fff;">Approve All</h3>
+            </div>
+            <button onclick="closeApproveModal()" style="width:32px;height:32px;border-radius:8px;
+                    background:rgba(255,255,255,0.12);border:none;cursor:pointer;
+                    display:flex;align-items:center;justify-content:center;color:#fff;">
+                <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+        <div style="padding:24px 28px;display:flex;flex-direction:column;gap:16px;text-align:center;">
+            <input type="hidden" id="approve-proc-id">
+            <svg width="48" height="48" fill="none" stroke="#22c55e" viewBox="0 0 24 24" style="margin:0 auto;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <p style="font-size:14px;color:#334155;">Are you sure you want to approve all remaining required documents and signatures for <strong id="approve-proc-name"></strong>?</p>
+            <p style="font-size:12px;color:#94a3b8;">This will instantly waive all pending items.</p>
+        </div>
+        <div style="padding:16px 28px;border-top:1px solid #f1f5f9;background:#fafbfe;
+                    display:flex;align-items:center;justify-content:flex-end;gap:10px;">
+            <button onclick="closeApproveModal()" style="padding:10px 16px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#64748b;font-size:12px;font-weight:700;cursor:pointer;">Cancel</button>
+            <button onclick="confirmApproveAll()" id="confirm-approve-btn" style="padding:10px 16px;border-radius:10px;border:none;background:#22c55e;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Yes, Approve All</button>
+        </div>
+    </div>
+</div>
+
 <script>
     const checkSvg12 = `<svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>`;
     const clockSvg12 = `<svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`;
@@ -713,7 +797,7 @@ foreach ($procurements as $p) {
     const canManageSaro = <?= $canManageSaro ? 'true' : 'false' ?>;
 
     function fmtMoney(n) {
-        return '₱' + Number(n).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        return '\u20B1' + Number(n).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
     }
 
     function updateRowAmounts(procId, status) {
@@ -832,6 +916,56 @@ foreach ($procurements as $p) {
             const procId   = this.dataset.procId;
             const procName = this.dataset.procName;
             openCancelModal(procId, procName);
+        });
+    });
+
+    // Approve All Modal functions
+    function openApproveModal(procId, procName) {
+        if (!canManageSaro) return;
+        document.getElementById('approve-proc-id').value = procId;
+        document.getElementById('approve-proc-name').textContent = procName || 'this activity';
+        document.getElementById('approveModal').style.display = 'flex';
+    }
+    function closeApproveModal() {
+        document.getElementById('approveModal').style.display = 'none';
+    }
+    document.getElementById('approveModal').addEventListener('click', function(e) {
+        if (e.target === this) closeApproveModal();
+    });
+
+    function confirmApproveAll() {
+        if (!canManageSaro) return;
+        const procId = document.getElementById('approve-proc-id').value;
+        const btn = document.getElementById('confirm-approve-btn');
+        btn.disabled = true;
+        btn.textContent = 'Approving...';
+
+        fetch(window.location.href, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: new URLSearchParams({ ajax_action: 'approve_all', procurementId: procId })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) { 
+                alert('Failed to approve.'); 
+                btn.disabled = false; 
+                btn.textContent = 'Yes, Approve All';
+                return; 
+            }
+            location.reload();
+        })
+        .catch(() => { 
+            btn.disabled = false; 
+            btn.textContent = 'Yes, Approve All';
+        });
+    }
+
+    document.querySelectorAll('.approve-all-btn').forEach(btn => {
+        btn.addEventListener('click', function () {
+            const procId   = this.dataset.procId;
+            const procName = this.dataset.procName;
+            openApproveModal(procId, procName);
         });
     });
 

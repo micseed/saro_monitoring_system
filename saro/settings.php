@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../class/Database.php';
 require_once __DIR__ . '/../class/notification.php';
@@ -76,7 +76,7 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
 
         .layout { display: flex; height: 100vh; }
 
-        /* ── Sidebar ── */
+        /* -- Sidebar -- */
         .sidebar {
             width: 256px; flex-shrink: 0;
             display: flex; flex-direction: column;
@@ -146,8 +146,8 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
         }
         .signout-btn:hover { background: rgba(239,68,68,0.12); color: #fca5a5; }
 
-        /* ── Main ── */
-        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        /* -- Main -- */
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
         .topbar {
             height: 64px; flex-shrink: 0;
             display: flex; align-items: center; justify-content: space-between;
@@ -164,11 +164,6 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
             transition: all 0.2s ease; position: relative;
         }
         .icon-btn:hover { border-color: #3b82f6; color: #2563eb; background: #eff6ff; }
-        .notif-dot {
-            position: absolute; top: 7px; right: 7px;
-            width: 7px; height: 7px; background: #ef4444;
-            border-radius: 50%; border: 1.5px solid #fff;
-        }
         .content { flex: 1; overflow-y: auto; padding: 28px 32px; }
 
         /* Hero */
@@ -338,12 +333,22 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
         .badge-pending { background: #fef9c3; color: #b45309; border: 1px solid #fde68a; }
         .badge-approved { background: #dcfce7; color: #16a34a; border: 1px solid #bbf7d0; }
         .badge-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+        /* Modal */
+        .modal-overlay { position: fixed; inset: 0; z-index: 300; background: rgba(15,23,42,0.6); backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; padding: 24px; }
+        .modal-overlay.open { display: flex; }
+        .modal-card { background: #fff; border-radius: 18px; width: 100%; max-width: 500px; box-shadow: 0 24px 64px rgba(0,0,0,0.2); overflow: hidden; display: flex; flex-direction: column; max-height: 90vh; }
+        .modal-header { padding: 22px 28px; background: linear-gradient(135deg, #1e3a8a, #2563eb); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+        .modal-body { padding: 24px 28px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+        .modal-footer { padding: 16px 28px; border-top: 1px solid #f1f5f9; background: #fafbfe; display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-shrink: 0; }
+        .modal-close-btn { width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.12); border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #fff; transition: background 0.2s ease; }
+        .modal-close-btn:hover { background: rgba(255,255,255,0.22); }
     </style>
 </head>
 <body>
 <div class="layout">
 
-    <!-- ══ Sidebar ══ -->
+    <!-- -- Sidebar -- -->
     <aside class="sidebar">
         <div class="sidebar-brand">
             <div class="brand-logo">
@@ -421,7 +426,7 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
         </div>
     </aside>
 
-    <!-- ══ Main ══ -->
+    <!-- -- Main -- -->
     <main class="main">
 
         <!-- Topbar -->
@@ -436,7 +441,7 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
             </div>
             <div class="topbar-right">
                 <!-- Notification -->
-                <?php $isAdmin = false; $pendingPwCount = $pendingPwCount ?? 0; $approvedPwReq = $approvedPwReq ?? null; include __DIR__ . '/../includes/notif_dropdown.php'; ?>
+                <?php $isAdmin = false; $pendingPwCount ??= 0; $approvedPwReq ??= null; include __DIR__ . '/../includes/notif_dropdown.php'; ?>
                 <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;
                             background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
                     <div style="width:28px;height:28px;border-radius:7px;
@@ -453,7 +458,7 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
             </div>
         </header>
 
-        <!-- ══ Content ══ -->
+        <!-- -- Content -- -->
         <div class="content">
 
             <!-- Hero -->
@@ -574,94 +579,21 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
                                 </div>
                             </div>
                             <div class="card-body">
-
-                                <!-- Info alert -->
-                                <div class="alert alert-info">
-                                    <svg class="alert-icon" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                    <span>For security, password changes require administrator approval. Fill in the form below and submit your request. You will be notified once your new password is set.</span>
-                                </div>
-
-                                <!-- Success alert -->
-                                <div class="alert alert-success" id="successAlert">
-                                    <svg class="alert-icon" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                    <span>Your password change request has been submitted. The administrator will process it shortly.</span>
-                                </div>
-
-                                <!-- Error alert -->
-                                <div class="alert alert-error" id="errorAlert">
-                                    <svg class="alert-icon" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                                    <span id="errorMsg">Please correct the errors and try again.</span>
-                                </div>
-
                                 <?php if (isset($_GET['req']) && $_GET['req'] === 'sent'): ?>
-                                <div class="alert alert-success" style="display:flex;">
+                                <div class="alert alert-success" style="display:flex;margin-bottom:4px;">
                                     <svg class="alert-icon" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                                     <span>Your password change request has been submitted. The administrator will process it shortly.</span>
                                 </div>
                                 <?php endif; ?>
-                                <form id="pwRequestForm" method="post" action="settings.php" novalidate>
-                                <input type="hidden" name="action" value="request_password">
-                                    <div class="form-group">
-                                        <label class="form-label">Current Password</label>
-                                        <div class="input-wrap">
-                                            <input type="password" class="form-input" id="currentPassword"
-                                                   placeholder="Enter your current password">
-                                            <button type="button" class="eye-btn" onclick="toggleEye('currentPassword', this)">
-                                                <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24" id="eye-currentPassword"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                                            </button>
-                                        </div>
-                                        <p class="form-hint">Required to verify your identity before submitting the request.</p>
-                                    </div>
-
-                                    <hr class="divider">
-
-                                    <div class="form-group">
-                                        <label class="form-label">Requested New Password</label>
-                                        <div class="input-wrap">
-                                            <input type="password" class="form-input" id="newPassword" name="new_password"
-                                                   placeholder="Enter your desired new password"
-                                                   oninput="checkStrength(this.value)">
-                                            <button type="button" class="eye-btn" onclick="toggleEye('newPassword', this)">
-                                                <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24" id="eye-newPassword"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                                            </button>
-                                        </div>
-                                        <!-- Strength meter -->
-                                        <div class="strength-bar" id="strengthBar">
-                                            <div class="strength-seg" id="seg1"></div>
-                                            <div class="strength-seg" id="seg2"></div>
-                                            <div class="strength-seg" id="seg3"></div>
-                                            <div class="strength-seg" id="seg4"></div>
-                                        </div>
-                                        <p class="strength-label" id="strengthLabel" style="color:#94a3b8;"></p>
-                                    </div>
-
-                                    <div class="form-group">
-                                        <label class="form-label">Confirm New Password</label>
-                                        <div class="input-wrap">
-                                            <input type="password" class="form-input" id="confirmPassword"
-                                                   placeholder="Re-enter your desired new password">
-                                            <button type="button" class="eye-btn" onclick="toggleEye('confirmPassword', this)">
-                                                <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24" id="eye-confirmPassword"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                                            </button>
-                                        </div>
-                                        <p class="form-hint">Both passwords must match.</p>
-                                    </div>
-
-                                    <div class="form-group">
-                                        <label class="form-label">Reason for Request <span style="color:#94a3b8;font-weight:500;text-transform:none;">(optional)</span></label>
-                                        <textarea class="form-input" id="requestReason" name="reason" rows="3"
-                                                  placeholder="e.g. Forgot current password, routine change, suspected compromise…"
-                                                  style="resize:vertical;min-height:80px;"></textarea>
-                                    </div>
-
-                                    <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;padding-top:4px;">
-                                        <button type="button" class="btn btn-ghost" onclick="resetForm()">Clear</button>
-                                        <button type="submit" class="btn btn-primary" id="submitBtn">
-                                            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
-                                            Submit Request
-                                        </button>
-                                    </div>
-                                </form>
+                                <p style="font-size:13px;color:#64748b;line-height:1.7;margin-bottom:20px;">
+                                    For security, password changes require administrator approval. Submit a request with your desired new password and a reason — you will be notified once it is approved and ready to apply.
+                                </p>
+                                <div>
+                                    <button type="button" class="btn btn-primary" onclick="openPwModal()">
+                                        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                                        Request Password Change
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -791,8 +723,92 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
     </main>
 </div>
 
+<!-- -- Password Request Modal -- -->
+<div class="modal-overlay" id="pwModal">
+    <div class="modal-card">
+        <div class="modal-header">
+            <div style="display:flex;align-items:center;gap:10px;">
+                <div style="width:34px;height:34px;border-radius:9px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;">
+                    <svg width="16" height="16" fill="none" stroke="#fff" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                </div>
+                <div>
+                    <p style="font-size:13px;font-weight:800;color:#fff;line-height:1.2;">Request Password Change</p>
+                    <p style="font-size:10px;color:rgba(255,255,255,0.55);font-weight:500;">Submit a request to the administrator</p>
+                </div>
+            </div>
+            <button class="modal-close-btn" onclick="closePwModal()">
+                <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+        <div class="modal-body">
+            <div class="alert alert-info" style="margin-bottom:0;">
+                <svg class="alert-icon" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span>Password changes require administrator approval. Fill in the form and submit your request. You will be notified once your new password is set.</span>
+            </div>
+            <div class="alert alert-error" id="errorAlert" style="margin-bottom:0;">
+                <svg class="alert-icon" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                <span id="errorMsg">Please correct the errors and try again.</span>
+            </div>
+            <form id="pwRequestForm" method="post" action="settings.php" novalidate style="display:flex;flex-direction:column;gap:16px;">
+                <input type="hidden" name="action" value="request_password">
+                <div class="form-group" style="margin-bottom:0;">
+                    <label class="form-label">Current Password</label>
+                    <div class="input-wrap">
+                        <input type="password" class="form-input" id="currentPassword" placeholder="Enter your current password">
+                        <button type="button" class="eye-btn" onclick="toggleEye('currentPassword', this)">
+                            <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24" id="eye-currentPassword"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                        </button>
+                    </div>
+                    <p class="form-hint">Required to verify your identity before submitting the request.</p>
+                </div>
+                <hr class="divider" style="margin:0;">
+                <div class="form-group" style="margin-bottom:0;">
+                    <label class="form-label">Requested New Password</label>
+                    <div class="input-wrap">
+                        <input type="password" class="form-input" id="newPassword" name="new_password"
+                               placeholder="Enter your desired new password" oninput="checkStrength(this.value)">
+                        <button type="button" class="eye-btn" onclick="toggleEye('newPassword', this)">
+                            <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24" id="eye-newPassword"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                        </button>
+                    </div>
+                    <div class="strength-bar" id="strengthBar">
+                        <div class="strength-seg" id="seg1"></div>
+                        <div class="strength-seg" id="seg2"></div>
+                        <div class="strength-seg" id="seg3"></div>
+                        <div class="strength-seg" id="seg4"></div>
+                    </div>
+                    <p class="strength-label" id="strengthLabel" style="color:#94a3b8;"></p>
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                    <label class="form-label">Confirm New Password</label>
+                    <div class="input-wrap">
+                        <input type="password" class="form-input" id="confirmPassword" placeholder="Re-enter your desired new password">
+                        <button type="button" class="eye-btn" onclick="toggleEye('confirmPassword', this)">
+                            <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24" id="eye-confirmPassword"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                        </button>
+                    </div>
+                    <p class="form-hint">Both passwords must match.</p>
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                    <label class="form-label">Reason for Request <span style="color:#94a3b8;font-weight:500;text-transform:none;">(optional)</span></label>
+                    <textarea class="form-input" id="requestReason" name="reason" rows="3"
+                              placeholder="e.g. Forgot current password, routine change, suspected compromise..."
+                              style="resize:vertical;min-height:76px;"></textarea>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-ghost" onclick="resetForm()">Clear</button>
+            <button type="submit" form="pwRequestForm" class="btn btn-primary" id="submitBtn">
+                <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
+                Submit Request
+            </button>
+        </div>
+    </div>
+</div>
+
 <script>
-    /* ── Section switcher ── */
+    /* -- Section switcher -- */
     function showSection(name) {
         ['profile','password'].forEach(s => {
             document.getElementById('section-' + s).style.display = s === name ? '' : 'none';
@@ -812,7 +828,7 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
         }
     })();
 
-    /* ── Password visibility toggle ── */
+    /* -- Password visibility toggle -- */
     function toggleEye(fieldId, btn) {
         const inp = document.getElementById(fieldId);
         const isPass = inp.type === 'password';
@@ -826,7 +842,7 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
         btn.style.color = isPass ? '#2563eb' : '';
     }
 
-    /* ── Password strength ── */
+    /* -- Password strength -- */
     function checkStrength(val) {
         let score = 0;
         if (val.length >= 8) score++;
@@ -852,7 +868,18 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
         }
     }
 
-    /* ── Form submission ── */
+    /* -- Modal open/close -- */
+    function openPwModal() {
+        document.getElementById('pwModal').classList.add('open');
+    }
+    function closePwModal() {
+        document.getElementById('pwModal').classList.remove('open');
+    }
+    document.getElementById('pwModal').addEventListener('click', function(e) {
+        if (e.target === this) closePwModal();
+    });
+
+    /* -- Form submission -- */
     document.getElementById('pwRequestForm').addEventListener('submit', function(e) {
         const newPw   = document.getElementById('newPassword').value;
         const confirm = document.getElementById('confirmPassword').value;
@@ -872,8 +899,7 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
 
         const btn = document.getElementById('submitBtn');
         btn.disabled = true;
-        btn.innerHTML = `<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="animation:spin 1s linear infinite;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Submitting…`;
-        // form will now submit naturally via POST
+        btn.innerHTML = `<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="animation:spin 1s linear infinite;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Submitting...`;
     });
 
     function showError(msg) {
@@ -883,12 +909,11 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
 
     function resetForm() {
         document.getElementById('pwRequestForm').reset();
-        document.getElementById('successAlert').style.display = 'none';
-        document.getElementById('errorAlert').style.display   = 'none';
+        document.getElementById('errorAlert').style.display = 'none';
         checkStrength('');
     }
 
-    /* ── Spinner keyframes ── */
+    /* -- Spinner keyframes -- */
     const style = document.createElement('style');
     style.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
     document.head.appendChild(style);

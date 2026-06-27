@@ -254,7 +254,7 @@ class Account {
     }
 
     /**
-     * Fetch only Admin-role users (excludes Super Admin) for the SARO audit log view.
+     * Fetch only Admin-role users (excludes System Admin) for the SARO audit log view.
      */
     public function getAdminOnlyUsers(): array {
         $stmt = $this->pdo->query("
@@ -268,7 +268,7 @@ class Account {
     }
 
     /**
-     * Fetch audit logs only from Admin-role users (excludes Super Admin actions).
+     * Fetch audit logs only from Admin-role users (excludes System Admin actions).
      */
     public function getAdminAuditLogs(int $limit = 100): array {
         $stmt = $this->pdo->prepare("

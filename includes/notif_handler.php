@@ -26,6 +26,12 @@ switch ($action) {
         echo json_encode(['success' => true]);
         break;
 
+    case 'mark_read':
+        $logId = (int)($_POST['logId'] ?? 0);
+        if ($logId > 0) $notif->markRead($userId, $logId);
+        echo json_encode(['success' => true]);
+        break;
+
     case 'dismiss':
         $logId = (int)($_POST['logId'] ?? 0);
         if ($logId <= 0) {

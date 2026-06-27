@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -57,7 +57,7 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
         ::-webkit-scrollbar-thumb:hover { background: #93c5fd; }
         .layout { display: flex; height: 100vh; }
 
-        /* ── Sidebar ── */
+        /* -- Sidebar -- */
         .sidebar {
             width: 256px; flex-shrink: 0;
             display: flex; flex-direction: column;
@@ -127,15 +127,14 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
         }
         .signout-btn:hover { background: rgba(239,68,68,0.12); color: #fca5a5; }
 
-        /* ── Main ── */
-        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        /* -- Main -- */
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; }
         .topbar { height: 64px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; background: #fff; border-bottom: 1px solid #e8edf5; }
         .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #64748b; }
         .breadcrumb-active { color: #0f172a; }
         .topbar-right { display: flex; align-items: center; gap: 16px; }
         .icon-btn { width: 36px; height: 36px; border-radius: 9px; background: #f8fafc; border: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; transition: all 0.2s ease; position: relative; }
         .icon-btn:hover { border-color: #3b82f6; color: #2563eb; background: #eff6ff; }
-        .notif-dot { position: absolute; top: 7px; right: 7px; width: 7px; height: 7px; background: #ef4444; border-radius: 50%; border: 1.5px solid #fff; }
         .content { flex: 1; overflow-y: auto; padding: 28px 32px; }
 
         /* Hero */
@@ -183,7 +182,7 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
 <body>
 <div class="layout">
 
-    <!-- ══ Sidebar ══ -->
+    <!-- -- Sidebar -- -->
     <aside class="sidebar">
         <div class="sidebar-brand">
             <div class="brand-logo">
@@ -314,6 +313,10 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                             <p style="font-size:10px;color:#94a3b8;font-weight:500;">Budget utilization per SARO</p>
                         </div>
                     </div>
+                    <div class="search-wrap">
+                        <svg class="search-icon" width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                        <input type="text" class="search-input" placeholder="Type to search...">
+                    </div>
                 </div>
 
                 <div style="overflow-x:auto;">
@@ -349,10 +352,10 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                                             <?= htmlspecialchars($s['saro_title']) ?>
                                         </p>
                                     </td>
-                                    <td style="text-align:right;"><span style="font-weight:800;color:#0f172a;font-size:13px;">₱<?= number_format($budget, 2) ?></span></td>
+                                    <td style="text-align:right;"><span style="font-weight:800;color:#0f172a;font-size:13px;">&#8369;<?= number_format($budget, 2) ?></span></td>
                                     <td style="text-align:right;">
                                         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
-                                            <span style="font-weight:700;color:<?= $percentage>0 ? '#16a34a' : '#94a3b8' ?>;font-size:13px;">₱<?= number_format($obligated, 2) ?></span>
+                                            <span style="font-weight:700;color:<?= $percentage>0 ? '#16a34a' : '#94a3b8' ?>;font-size:13px;">&#8369;<?= number_format($obligated, 2) ?></span>
                                             <div class="progress-wrap" style="align-items:flex-end;">
                                                 <div class="progress-bar" style="width:120px;">
                                                     <div class="progress-fill <?= $fillClass ?>" style="width:<?= min(100, $percentage) ?>%;"></div>
@@ -361,7 +364,7 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                                             </div>
                                         </div>
                                     </td>
-                                    <td style="text-align:right;"><span style="font-weight:700;color:#b45309;font-size:13px;">₱<?= number_format($unobligated, 2) ?></span></td>
+                                    <td style="text-align:right;"><span style="font-weight:700;color:#b45309;font-size:13px;">&#8369;<?= number_format($unobligated, 2) ?></span></td>
                                     <td style="text-align:center;">
                                         <a href="view_procure_act.php?id=<?= $s['saroId'] ?>" class="action-btn action-btn-view" title="View Procurements">
                                             <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
@@ -375,8 +378,17 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                 </div>
 
                 <div class="panel-footer">
+                    <div class="show-rows-wrap">
+                        <span>Show</span>
+                        <select class="show-rows-select">
+                            <option selected>10 rows</option>
+                            <option>20 rows</option>
+                            <option>30 rows</option>
+                            <option>50 rows</option>
+                        </select>
+                    </div>
                     <p style="font-size:11px;color:#94a3b8;font-weight:500;">
-                        Displaying <strong style="color:#475569;"><?= count($saros) ?></strong> SARO entries
+                        Displaying <strong id="row-count" style="color:#475569;"><?= min(10, count($saros)) ?></strong> of <strong style="color:#475569;"><?= count($saros) ?></strong> SARO entries
                     </p>
                 </div>
             </div>
@@ -384,7 +396,36 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
     </main>
 </div>
 <script>
+(function () {
+    const panel = document.querySelector('.table-panel');
+    if (!panel) return;
+    const tbody = panel.querySelector('tbody');
+    if (!tbody) return;
+    const allRows = Array.from(tbody.querySelectorAll('tr')).filter(function (tr) { return !tr.querySelector('td[colspan]'); });
+    const emptyRow = tbody.querySelector('tr td[colspan]') ? tbody.querySelector('tr td[colspan]').closest('tr') : null;
+    const searchInput = panel.querySelector('.search-input');
+    const rowsSel = panel.querySelector('.show-rows-select');
+    const countEl = document.getElementById('row-count');
+
+    function apply() {
+        const q = searchInput ? searchInput.value.trim().toLowerCase() : '';
+        const limit = rowsSel ? (parseInt(rowsSel.value, 10) || 10) : 10;
+        let shown = 0, matched = 0;
+        allRows.forEach(function (row) {
+            const isMatch = !q || row.textContent.toLowerCase().includes(q);
+            if (isMatch) matched++;
+            const show = isMatch && shown < limit;
+            row.style.display = show ? '' : 'none';
+            if (show) shown++;
+        });
+        if (emptyRow) emptyRow.style.display = matched === 0 ? '' : 'none';
+        if (countEl) countEl.textContent = shown;
+    }
+
+    if (searchInput) searchInput.addEventListener('input', apply);
+    if (rowsSel) rowsSel.addEventListener('change', apply);
+    apply();
+})();
 </script>
-<script src="../assets/js/table_controls.js"></script>
 </body>
 </html>

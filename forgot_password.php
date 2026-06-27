@@ -47,7 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $error = 'You have recently requested a password reset. Please wait 30 minutes before trying again.';
                         $foundUser = null;
                     } else {
-                        // ── Super Admin: send email token reset ───────────────
+                        // ── Sys   tem Admin: send email token reset ───────────────
                         // Remove any existing unused tokens for this user
                     $conn->prepare("DELETE FROM password_resets WHERE userId = ? AND used_at IS NULL")
                          ->execute([$foundUser['userId']]);
@@ -268,7 +268,7 @@ function maskEmail(string $email): string {
     <div style="flex:1;display:flex;flex-direction:column;justify-content:center;max-width:380px;width:100%;margin:0 auto;padding:40px 0;">
 
         <?php if ($step === 'email_sent'): ?>
-        <!-- ── Email sent (super admin) ── -->
+        <!-- ── Email sent (system admin) ── -->
         <div style="text-align:center;">
             <div class="success-icon" style="background:#eff6ff;border:2px solid #bfdbfe;">
                 <svg width="32" height="32" fill="none" stroke="#2563eb" viewBox="0 0 24 24">

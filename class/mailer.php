@@ -47,7 +47,7 @@ class Mailer
             $mail->Body    = self::buildHtml($toName, $resetUrl);
             $mail->AltBody =
                 "Hi $toName,\n\n" .
-                "Reset your Super Admin password here:\n$resetUrl\n\n" .
+                "Reset your System Admin password here:\n$resetUrl\n\n" .
                 "This link expires in 1 hour.\n" .
                 "If you did not request this, ignore this email.";
 
@@ -83,7 +83,7 @@ class Mailer
       <td style="padding:36px 40px;">
         <p style="margin:0 0 16px;font-size:15px;font-weight:600;color:#0f172a;">Hi {$name},</p>
         <p style="margin:0 0 24px;font-size:14px;color:#475569;line-height:1.7;">
-          We received a request to reset the password for your <strong>Super Admin</strong> account.
+          We received a request to reset the password for your <strong>System Admin</strong> account.
           Click the button below to set a new password.
         </p>
         <div style="text-align:center;margin:28px 0;">
