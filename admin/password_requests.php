@@ -19,13 +19,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['req
     $note  = trim($_POST['admin_note'] ?? '');
 
     if ($act === 'approved') {
-        $newPw = $_POST['new_password'] ?? '';
-        if (strlen($newPw) >= 8) {
-            $pr = $pdo->prepare("SELECT userId FROM password_requests WHERE requestId = ?");
-            $pr->execute([$reqId]);
-            $target = $pr->fetch();
-            if ($target) {
-                $hash = password_hash($newPw, PASSWORD_DEFAULT);
+        $pr = $pdo->prepare("SELECT userId, requested_new_password FROM password_requests WHERE requestId = ?");
+        $pr->execute([$reqId]);
+        $target = $pr->fetch();
+        if ($target) {
+            $newPw = $_POST['new_password'] ?? '';
+            $passwordToApply = '';
+            
+            if (strlen($newPw) >= 8) {
+                $passwordToApply = $newPw;
+            } elseif (!empty($target['requested_new_password'])) {
+                $passwordToApply = $target['requested_new_password'];
+            }
+
+            if (!empty($passwordToApply)) {
+                $hash = password_hash($passwordToApply, PASSWORD_DEFAULT);
                 $pdo->prepare("UPDATE user SET password = ?, updated_at = NOW() WHERE userId = ?")
                     ->execute([$hash, $target['userId']]);
                 $pdo->prepare("
@@ -49,7 +57,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['req
 
 // Fetch all password requests with user details
 $requests = $pdo->query("
-    SELECT pr.requestId, pr.reason, pr.status, pr.admin_note, pr.requested_at, pr.resolved_at,
+    SELECT pr.requestId, pr.reason, pr.status, pr.admin_note, pr.requested_at, pr.resolved_at, pr.requested_new_password,
            u.first_name, u.last_name, u.email, ur.role AS user_role,
            r.first_name AS resolver_fname, r.last_name AS resolver_lname
     FROM password_requests pr
@@ -58,6 +66,9 @@ $requests = $pdo->query("
     LEFT JOIN user r ON pr.resolved_by = r.userId
     ORDER BY pr.requested_at ASC
 ")->fetchAll();
+$pendingRequests = array_filter($requests, fn($r) => $r['status'] === 'pending');
+$resolvedRequests = array_filter($requests, fn($r) => $r['status'] !== 'pending');
+
 
 $totalReq    = count($requests);
 $pendingReq  = count(array_filter($requests, fn($r) => $r['status'] === 'pending'));
@@ -210,6 +221,72 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
 
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    
+        /* Mobile Responsiveness */
+        @media (max-width: 768px) {
+            .sidebar {
+                position: absolute;
+                z-index: 50;
+                height: 100%;
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+            }
+            .sidebar.open {
+                transform: translateX(0);
+                box-shadow: 4px 0 24px rgba(0,0,0,0.1);
+            }
+            .topbar {
+                padding: 0 16px;
+                height: auto;
+                min-height: 64px;
+                flex-wrap: wrap;
+            }
+            .topbar-right {
+                margin-left: auto;
+            }
+            .content {
+                padding: 16px;
+            }
+            .stat-grid {
+                grid-template-columns: 1fr;
+            }
+            .panel-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+            .table-panel {
+                min-height: auto;
+                overflow-x: auto;
+            }
+            .mobile-menu-btn {
+                display: flex !important;
+                margin-right: 12px;
+                align-items: center;
+                justify-content: center;
+                background: none;
+                border: none;
+                cursor: pointer;
+                color: #64748b;
+            }
+            .overlay {
+                display: none;
+                position: fixed;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0,0,0,0.4);
+                z-index: 40;
+                opacity: 0;
+                transition: opacity 0.3s ease;
+            }
+            .overlay.show {
+                display: block;
+                opacity: 1;
+            }
+        }
+        @media (min-width: 769px) {
+            .mobile-menu-btn { display: none !important; }
+            .overlay { display: none !important; }
+        }
     </style>
 </head>
 <body>
@@ -255,6 +332,12 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                 Export Records
             </a>
+        
+            <p class="nav-section-label">Configuration</p>
+            <a href="settings_admin.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                Settings
+            </a>
         </nav>
         <div class="sidebar-footer">
             <div class="user-card">
@@ -272,6 +355,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
     </aside>
 
     <!-- ══ Main ══ -->
+        <div class="overlay"></div>
     <main class="main">
         <header class="topbar">
             <div class="breadcrumb">
@@ -360,28 +444,22 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                 </div>
             </div>
 
-            <!-- Requests Panel -->
-            <div class="panel">
+            <!-- Requests Panel: Pending -->
+            <div class="panel" id="pending-panel">
                 <div class="panel-header">
                     <div style="display:flex;align-items:center;gap:10px;">
-                        <div style="width:32px;height:32px;border-radius:8px;background:#fef2f2;display:flex;align-items:center;justify-content:center;">
-                            <svg width="15" height="15" fill="none" stroke="#dc2626" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                        <div style="width:32px;height:32px;border-radius:8px;background:#fffbeb;display:flex;align-items:center;justify-content:center;">
+                            <svg width="15" height="15" fill="none" stroke="#d97706" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                         </div>
                         <div>
-                            <p style="font-size:13px;font-weight:800;color:#0f172a;">All Password Requests</p>
-                            <p style="font-size:10px;color:#94a3b8;font-weight:500;">Manage change requests from system users</p>
+                            <p style="font-size:13px;font-weight:800;color:#0f172a;">Pending Password Requests</p>
+                            <p style="font-size:10px;color:#94a3b8;font-weight:500;">Action required on these requests</p>
                         </div>
                     </div>
                     <div style="display:flex;align-items:center;gap:10px;">
-                        <div class="filter-tabs" id="reqFilterTabs">
-                            <button type="button" class="filter-tab active" data-filter="all">All</button>
-                            <button type="button" class="filter-tab" data-filter="pending">Pending</button>
-                            <button type="button" class="filter-tab" data-filter="approved">Approved</button>
-                            <button type="button" class="filter-tab" data-filter="rejected">Rejected</button>
-                        </div>
                         <div class="search-wrap">
                             <svg class="search-icon" width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                            <input type="text" class="search-input" id="reqSearch" placeholder="Search requests...">
+                            <input type="text" class="search-input" id="pendingSearch" placeholder="Search pending...">
                         </div>
                     </div>
                 </div>
@@ -400,11 +478,11 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                                 <th style="text-align:center;min-width:160px;">Actions</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            <?php if (empty($requests)): ?>
-                            <tr><td colspan="8" style="text-align:center;padding:24px;color:#94a3b8;font-size:13px;">No password requests found.</td></tr>
+                        <tbody id="pendingTbody">
+                            <?php if (empty($pendingRequests)): ?>
+                            <tr><td colspan="8" style="text-align:center;padding:24px;color:#94a3b8;font-size:13px;">No pending password requests.</td></tr>
                             <?php else: ?>
-                            <?php foreach ($requests as $idx => $req):
+                            <?php foreach ($pendingRequests as $idx => $req):
                                 $fI = strtoupper(substr($req['first_name'], 0, 1));
                                 $lI = strtoupper(substr($req['last_name'],  0, 1));
                                 $reqDateLine1 = date('M d, Y', strtotime($req['requested_at']));
@@ -446,7 +524,8 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                                 <td style="text-align:center;">
                                     <?php if ($req['status'] === 'pending'): ?>
                                     <div style="display:flex;align-items:center;justify-content:center;gap:6px;">
-                                        <button class="btn-approve" onclick="openResolve('approve', '<?= htmlspecialchars($req['first_name'] . ' ' . $req['last_name'], ENT_QUOTES) ?>', <?= $req['requestId'] ?>)">
+                                        <?php $hasReqPw = !empty($req['requested_new_password']) ? 'true' : 'false'; ?>
+                                        <button class="btn-approve" onclick="openResolve('approve', '<?= htmlspecialchars($req['first_name'] . ' ' . $req['last_name'], ENT_QUOTES) ?>', <?= $req['requestId'] ?>, <?= $hasReqPw ?>)">
                                             <svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
                                             Approve
                                         </button>
@@ -469,14 +548,134 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                 <div class="panel-footer">
                     <div class="show-rows-wrap">
                         <span>Show</span>
-                        <select class="show-rows-select" id="reqRows">
+                        <select class="show-rows-select" id="pendingRows">
                             <option value="10" selected>10</option>
                             <option value="20">20</option>
                             <option value="50">50</option>
                         </select>
                         rows
                     </div>
-                    <p style="font-size:11px;color:#94a3b8;font-weight:500;">Displaying <strong id="row-count" style="color:#475569;"><?= $totalReq ?></strong> of <strong style="color:#475569;"><?= $totalReq ?></strong> request<?= $totalReq !== 1 ? 's' : '' ?></p>
+                    <p style="font-size:11px;color:#94a3b8;font-weight:500;">Displaying <strong id="pending-count" style="color:#475569;"><?= count($pendingRequests) ?></strong> request<?= count($pendingRequests) !== 1 ? 's' : '' ?></p>
+                </div>
+            </div>
+
+            <!-- Requests Panel: Resolved -->
+            <div class="panel" id="resolved-panel" style="margin-top:24px;">
+                <div class="panel-header">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <div style="width:32px;height:32px;border-radius:8px;background:#f0fdf4;display:flex;align-items:center;justify-content:center;">
+                            <svg width="15" height="15" fill="none" stroke="#16a34a" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        </div>
+                        <div>
+                            <p style="font-size:13px;font-weight:800;color:#0f172a;">Resolved Password Requests</p>
+                            <p style="font-size:10px;color:#94a3b8;font-weight:500;">History of approved and rejected requests</p>
+                        </div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <div class="filter-tabs" id="resolvedFilterTabs">
+                            <button type="button" class="filter-tab active" data-filter="all">All</button>
+                            <button type="button" class="filter-tab" data-filter="approved">Approved</button>
+                            <button type="button" class="filter-tab" data-filter="rejected">Rejected</button>
+                        </div>
+                        <div class="search-wrap">
+                            <svg class="search-icon" width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                            <input type="text" class="search-input" id="resolvedSearch" placeholder="Search history...">
+                        </div>
+                    </div>
+                </div>
+
+                <div style="overflow-x:auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>No.</th>
+                                <th style="min-width:180px;">User</th>
+                                <th style="text-align:center;">Role</th>
+                                <th style="min-width:120px;">Request Date</th>
+                                <th style="min-width:160px;">Reason</th>
+                                <th style="text-align:center;">Status</th>
+                                <th style="min-width:120px;">Resolved By</th>
+                                <th style="text-align:center;min-width:160px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resolvedTbody">
+                            <?php if (empty($resolvedRequests)): ?>
+                            <tr><td colspan="8" style="text-align:center;padding:24px;color:#94a3b8;font-size:13px;">No resolved password requests found.</td></tr>
+                            <?php else: ?>
+                            <?php foreach ($resolvedRequests as $idx => $req):
+                                $fI = strtoupper(substr($req['first_name'], 0, 1));
+                                $lI = strtoupper(substr($req['last_name'],  0, 1));
+                                $reqDateLine1 = date('M d, Y', strtotime($req['requested_at']));
+                                $reqDateLine2 = date('g:i A',  strtotime($req['requested_at']));
+                                $reasonHtml   = $req['reason'] ? '<span class="reason-chip">' . htmlspecialchars($req['reason']) . '</span>' : '<span style="font-size:11px;color:#94a3b8;font-style:italic;">No reason provided</span>';
+                                $badgeCls     = match($req['status']) {
+                                    'approved' => 'badge-green',
+                                    'rejected' => 'badge-red',
+                                    default    => 'badge-amber',
+                                };
+                                $roleClass = strtolower(str_replace(' ', '-', preg_replace('/[^a-zA-Z ]/', '', $req['user_role'])));
+                                $resolverHtml = '—';
+                                if ($req['resolver_fname']) {
+                                    $resolverHtml = '<p style="font-size:11px;font-weight:600;color:#334155;">' . htmlspecialchars($req['resolver_fname'] . ' ' . $req['resolver_lname']) . '</p>';
+                                    if ($req['resolved_at']) {
+                                        $resolverHtml .= '<p style="font-size:10px;color:#94a3b8;">' . date('M d · g:i A', strtotime($req['resolved_at'])) . '</p>';
+                                    }
+                                }
+                            ?>
+                            <tr class="req-row" data-status="<?= htmlspecialchars($req['status']) ?>">
+                                <td style="color:#cbd5e1;font-weight:700;font-size:12px;"><?= str_pad($idx + 1, 2, '0', STR_PAD_LEFT) ?></td>
+                                <td>
+                                    <div style="display:flex;align-items:center;gap:10px;">
+                                        <span class="u-avatar" style="background:linear-gradient(135deg,#2563eb,#1d4ed8);"><?= htmlspecialchars($fI . $lI) ?></span>
+                                        <div>
+                                            <p style="font-weight:700;color:#0f172a;font-size:13px;line-height:1.2;"><?= htmlspecialchars($req['first_name'] . ' ' . $req['last_name']) ?></p>
+                                            <p style="font-size:10px;color:#94a3b8;"><?= htmlspecialchars($req['email']) ?></p>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td style="text-align:center;"><span class="role-pill role-admin"><?= htmlspecialchars($req['user_role']) ?></span></td>
+                                <td>
+                                    <p style="font-size:12px;font-weight:700;color:#0f172a;"><?= $reqDateLine1 ?></p>
+                                    <p style="font-size:10px;color:#94a3b8;"><?= $reqDateLine2 ?></p>
+                                </td>
+                                <td><?= $reasonHtml ?></td>
+                                <td style="text-align:center;"><span class="badge <?= $badgeCls ?>"><span class="badge-dot"></span><?= ucfirst(htmlspecialchars($req['status'])) ?></span></td>
+                                <td><?= $resolverHtml ?></td>
+                                <td style="text-align:center;">
+                                    <?php if ($req['status'] === 'pending'): ?>
+                                    <div style="display:flex;align-items:center;justify-content:center;gap:6px;">
+                                        <?php $hasReqPw = !empty($req['requested_new_password']) ? 'true' : 'false'; ?>
+                                        <button class="btn-approve" onclick="openResolve('approve', '<?= htmlspecialchars($req['first_name'] . ' ' . $req['last_name'], ENT_QUOTES) ?>', <?= $req['requestId'] ?>, <?= $hasReqPw ?>)">
+                                            <svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+                                            Approve
+                                        </button>
+                                        <button class="btn-reject" onclick="openResolve('reject', '<?= htmlspecialchars($req['first_name'] . ' ' . $req['last_name'], ENT_QUOTES) ?>', <?= $req['requestId'] ?>)">
+                                            <svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>
+                                            Reject
+                                        </button>
+                                    </div>
+                                    <?php else: ?>
+                                    <span style="font-size:11px;color:#94a3b8;font-weight:500;">Resolved</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                            <?php endforeach; ?>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="panel-footer">
+                    <div class="show-rows-wrap">
+                        <span>Show</span>
+                        <select class="show-rows-select" id="resolvedRows">
+                            <option value="10" selected>10</option>
+                            <option value="20">20</option>
+                            <option value="50">50</option>
+                        </select>
+                        rows
+                    </div>
+                    <p style="font-size:11px;color:#94a3b8;font-weight:500;">Displaying <strong id="resolved-count" style="color:#475569;"><?= count($resolvedRequests) ?></strong> request<?= count($resolvedRequests) !== 1 ? 's' : '' ?></p>
                 </div>
             </div>
 
@@ -550,7 +749,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
 </form>
 
 <script>
-    function openResolve(type, name, requestId) {
+    function openResolve(type, name, requestId, hasReqPw = false) {
         const modal      = document.getElementById('modal-resolve');
         const icon       = document.getElementById('modal-icon');
         const title      = document.getElementById('modal-title');
@@ -580,12 +779,21 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
             alert.style.border     = '1px solid #bbf7d0';
             alertIcon.style.stroke = '#16a34a';
             alertText.style.color  = '#166534';
-            alertText.textContent  = 'Set a new password for ' + name + '. Their password will be updated immediately upon approval.';
-            confirmBtn.textContent = '✔ Approve & Reset Password';
+            
             confirmBtn.style.background  = '#16a34a';
             confirmBtn.style.borderColor = '#16a34a';
-            pwWrap.style.display = '';
-            pwInput.required     = true;
+            
+            if (hasReqPw) {
+                alertText.textContent  = 'Approve the password change for ' + name + '. Their requested password will be applied immediately.';
+                confirmBtn.textContent = '✔ Approve & Apply Password';
+                pwWrap.style.display = 'none';
+                pwInput.required     = false;
+            } else {
+                alertText.textContent  = 'Set a new password for ' + name + '. Their password will be updated immediately upon approval.';
+                confirmBtn.textContent = '✔ Approve & Reset Password';
+                pwWrap.style.display = '';
+                pwInput.required     = true;
+            }
         } else {
             icon.style.background = '#fef2f2';
             icon.innerHTML = '<svg width="16" height="16" fill="none" stroke="#dc2626" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
@@ -624,40 +832,81 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
 </script>
 <script>
 (function () {
-    const allRows  = Array.from(document.querySelectorAll('.req-row'));
-    const searchEl = document.getElementById('reqSearch');
-    const rowsSel  = document.getElementById('reqRows');
-    const countEl  = document.getElementById('row-count');
-    const tabs     = document.querySelectorAll('#reqFilterTabs .filter-tab');
-    let activeFilter = 'all';
+    // Pending
+    const pendingRows  = Array.from(document.querySelectorAll('#pendingTbody .req-row'));
+    const pendingSearch = document.getElementById('pendingSearch');
+    const pendingRowsSel  = document.getElementById('pendingRows');
+    const pendingCount  = document.getElementById('pending-count');
 
-    function apply() {
-        const q     = searchEl ? searchEl.value.trim().toLowerCase() : '';
-        const limit = rowsSel ? (parseInt(rowsSel.value, 10) || 10) : 10;
+    function applyPending() {
+        const q     = pendingSearch ? pendingSearch.value.trim().toLowerCase() : '';
+        const limit = pendingRowsSel ? (parseInt(pendingRowsSel.value, 10) || 10) : 10;
         let shown = 0;
-        allRows.forEach(function (row) {
-            const statusMatch = activeFilter === 'all' || row.dataset.status === activeFilter;
+        pendingRows.forEach(function (row) {
+            const searchMatch = !q || row.textContent.toLowerCase().includes(q);
+            const show = searchMatch && shown < limit;
+            row.style.display = show ? '' : 'none';
+            if (show) shown++;
+        });
+        if (pendingCount) pendingCount.textContent = shown;
+    }
+    if (pendingSearch) pendingSearch.addEventListener('input', applyPending);
+    if (pendingRowsSel)  pendingRowsSel.addEventListener('change', applyPending);
+    applyPending();
+
+    // Resolved
+    const resolvedRows  = Array.from(document.querySelectorAll('#resolvedTbody .req-row'));
+    const resolvedSearch = document.getElementById('resolvedSearch');
+    const resolvedRowsSel  = document.getElementById('resolvedRows');
+    const resolvedCount  = document.getElementById('resolved-count');
+    const resolvedTabs     = document.querySelectorAll('#resolvedFilterTabs .filter-tab');
+    let resolvedActiveFilter = 'all';
+
+    function applyResolved() {
+        const q     = resolvedSearch ? resolvedSearch.value.trim().toLowerCase() : '';
+        const limit = resolvedRowsSel ? (parseInt(resolvedRowsSel.value, 10) || 10) : 10;
+        let shown = 0;
+        resolvedRows.forEach(function (row) {
+            const statusMatch = resolvedActiveFilter === 'all' || row.dataset.status === resolvedActiveFilter;
             const searchMatch = !q || row.textContent.toLowerCase().includes(q);
             const show = statusMatch && searchMatch && shown < limit;
             row.style.display = show ? '' : 'none';
             if (show) shown++;
         });
-        if (countEl) countEl.textContent = shown;
+        if (resolvedCount) resolvedCount.textContent = shown;
     }
-
-    tabs.forEach(function (tab) {
+    resolvedTabs.forEach(function (tab) {
         tab.addEventListener('click', function () {
-            tabs.forEach(function (t) { t.classList.remove('active'); });
+            resolvedTabs.forEach(function (t) { t.classList.remove('active'); });
             tab.classList.add('active');
-            activeFilter = tab.dataset.filter;
-            apply();
+            resolvedActiveFilter = tab.dataset.filter;
+            applyResolved();
         });
     });
-
-    if (searchEl) searchEl.addEventListener('input', apply);
-    if (rowsSel)  rowsSel.addEventListener('change', apply);
-    apply();
+    if (resolvedSearch) resolvedSearch.addEventListener('input', applyResolved);
+    if (resolvedRowsSel)  resolvedRowsSel.addEventListener('change', applyResolved);
+    applyResolved();
 })();
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.querySelector('.mobile-menu-btn');
+    const sidebar = document.querySelector('.sidebar');
+    const overlay = document.querySelector('.overlay');
+
+    if(btn && sidebar && overlay) {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sidebar.classList.add('open');
+            overlay.classList.add('show');
+        });
+        overlay.addEventListener('click', () => {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('show');
+        });
+    }
+});
 </script>
 </body>
 </html>

@@ -180,7 +180,73 @@ tbody tr:hover { background: #f5f8ff; }
     .layout { display: none !important; }
     #print-area { display: block !important; visibility: visible; }
 }
-</style>
+
+        /* Mobile Responsiveness */
+        @media (max-width: 768px) {
+            .sidebar {
+                position: absolute;
+                z-index: 50;
+                height: 100%;
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+            }
+            .sidebar.open {
+                transform: translateX(0);
+                box-shadow: 4px 0 24px rgba(0,0,0,0.1);
+            }
+            .topbar {
+                padding: 0 16px;
+                height: auto;
+                min-height: 64px;
+                flex-wrap: wrap;
+            }
+            .topbar-right {
+                margin-left: auto;
+            }
+            .content {
+                padding: 16px;
+            }
+            .stat-grid {
+                grid-template-columns: 1fr;
+            }
+            .panel-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+            .table-panel {
+                min-height: auto;
+                overflow-x: auto;
+            }
+            .mobile-menu-btn {
+                display: flex !important;
+                margin-right: 12px;
+                align-items: center;
+                justify-content: center;
+                background: none;
+                border: none;
+                cursor: pointer;
+                color: #64748b;
+            }
+            .overlay {
+                display: none;
+                position: fixed;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0,0,0,0.4);
+                z-index: 40;
+                opacity: 0;
+                transition: opacity 0.3s ease;
+            }
+            .overlay.show {
+                display: block;
+                opacity: 1;
+            }
+        }
+        @media (min-width: 769px) {
+            .mobile-menu-btn { display: none !important; }
+            .overlay { display: none !important; }
+        }
+    </style>
 </head>
 <body>
 <div class="layout">
@@ -222,7 +288,8 @@ tbody tr:hover { background: #f5f8ff; }
 </aside>
 
 <!-- Main -->
-<main class="main">
+    <div class="overlay"></div>
+    <main class="main">
   <header class="topbar">
     <div class="breadcrumb">
       <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m0 0l-7 7-7-7M19 10v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
@@ -368,7 +435,7 @@ tbody tr:hover { background: #f5f8ff; }
               $rowId      = 'proc-' . $s['saroId'];
               $sstyle     = $statusStyles[$s['status']] ?? 'background:#f1f5f9;color:#64748b;';
             ?>
-            <tr class="saro-row" data-status="<?= htmlspecialchars($s['status']) ?>" onclick="toggleProc('<?= $rowId ?>', this)">
+            <tr class="saro-row" data-id="<?= $s['saroId'] ?>" data-status="<?= htmlspecialchars($s['status']) ?>" onclick="toggleProc('<?= $rowId ?>', this)">
               <td style="color:#cbd5e1;font-size:12px;"><?= str_pad($i+1,2,'0',STR_PAD_LEFT) ?></td>
               <td><span style="font-weight:800;color:#0f172a;font-size:13px;"><?= htmlspecialchars($s['saroNo']) ?></span></td>
               <td style="max-width:220px;"><p style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#334155;"><?= htmlspecialchars($s['saro_title']) ?></p></td>
@@ -554,6 +621,14 @@ const reportData = <?= json_encode([
 ]) ?>;
 
 function printReport() {
+    const visibleRows = Array.from(document.querySelectorAll('tr.saro-row')).filter(r => r.style.display !== 'none');
+    if (visibleRows.length === 0) {
+        alert("No records to print.");
+        return;
+    }
+    const visibleIds = visibleRows.map(r => parseInt(r.getAttribute('data-id'), 10));
+    const sarosToPrint = reportData.saros.filter(s => visibleIds.includes(s.saroId));
+
     const fmt = n => '\u20B1' + parseFloat(n).toLocaleString('en-PH', {minimumFractionDigits:2, maximumFractionDigits:2});
     const fmtDate = d => d ? new Date(d).toLocaleDateString('en-PH', {year:'numeric',month:'short',day:'numeric'}) : '—';
     const fmtPeriod = (s, e) => {
@@ -564,10 +639,15 @@ function printReport() {
     };
 
     let saroPrint = '';
-    reportData.saros.forEach((s, si) => {
+    let totalBudget = 0;
+    let totalObligated = 0;
+
+    sarosToPrint.forEach((s, si) => {
+        totalBudget += s.total_budget;
+        totalObligated += s.total_obligated;
         const bur = s.total_budget > 0 ? (s.total_obligated / s.total_budget * 100).toFixed(1) : '0.0';
         let procRows = '';
-        if (s.procurements.length) {
+        if (s.procurements && s.procurements.length) {
             s.procurements.forEach(p => {
                 const statLabel = p.status ? ` [${p.status.toUpperCase()}]` : '';
                 procRows += `<tr>
@@ -612,24 +692,25 @@ function printReport() {
         </div>`;
     });
 
+    const utilRate = totalBudget > 0 ? (totalObligated / totalBudget * 100).toFixed(1) : 0.0;
     const now = new Date().toLocaleDateString('en-PH',{year:'numeric',month:'long',day:'numeric'});
     document.getElementById('print-area').innerHTML = `
     <style>
         #print-area { font-family: Arial, sans-serif; font-size: 10.5px; color: #111; padding: 24px 28px; }
-        #print-area .rpt-header { margin-bottom: 18px; border-bottom: 2px solid #312e81; padding-bottom: 12px; }
-        #print-area .rpt-header h1 { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #312e81; }
+        #print-area .rpt-header { margin-bottom: 18px; border-bottom: 2px solid #7f1d1d; padding-bottom: 12px; }
+        #print-area .rpt-header h1 { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #7f1d1d; }
         #print-area .rpt-header p { font-size: 10px; color: #555; margin-top: 3px; }
-        #print-area .summary-bar { display: flex; gap: 28px; margin-bottom: 16px; padding: 10px 14px; background: #f0f0fa; border-radius: 6px; }
+        #print-area .summary-bar { display: flex; gap: 28px; margin-bottom: 16px; padding: 10px 14px; background: #fef2f2; border-radius: 6px; }
         #print-area .summary-bar span { font-size: 11px; }
         #print-area .saro-block { margin-bottom: 18px; page-break-inside: avoid; }
-        #print-area .saro-head { background: #312e81; color: #fff; padding: 7px 10px; border-radius: 5px 5px 0 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        #print-area .saro-head { background: #7f1d1d; color: #fff; padding: 7px 10px; border-radius: 5px 5px 0 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
         #print-area .saro-num  { font-weight: 700; margin-right: 5px; }
         #print-area .saro-title { color: rgba(255,255,255,0.7); font-size: 10px; margin-left: 6px; }
         #print-area .saro-summary { display: flex; gap: 14px; font-size: 10px; color: rgba(255,255,255,0.85); flex-wrap: wrap; }
         #print-area .pt { width: 100%; border-collapse: collapse; }
-        #print-area .pt thead th { background: #e8e8f8; padding: 6px 8px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; text-align: left; }
+        #print-area .pt thead th { background: #fee2e2; padding: 6px 8px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; text-align: left; }
         #print-area .pt tbody td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; font-size: 10px; }
-        #print-area .pt tbody tr:nth-child(even) { background: #f9f9fd; }
+        #print-area .pt tbody tr:nth-child(even) { background: #fff5f5; }
         #print-area .pt .c { text-align: center; }
         #print-area .pt .r { text-align: right; }
         #print-area .rpt-footer { margin-top: 18px; font-size: 10px; color: #555; text-align: right; border-top: 1px solid #ddd; padding-top: 8px; }
@@ -639,19 +720,39 @@ function printReport() {
         <p>DICT — Zamboanga-BASULTA Cluster &nbsp;|&nbsp; Printed: ${now}</p>
     </div>
     <div class="summary-bar">
-        <span>Total SAROs: <strong>${reportData.saros.length}</strong></span>
-        <span>Total Budget: <strong>${fmt(reportData.yearBudget)}</strong></span>
-        <span>Total Obligated: <strong>${fmt(reportData.yearObligated)}</strong></span>
-        <span>Utilization Rate: <strong>${reportData.yearRate}%</strong></span>
+        <span>Total SAROs: <strong>${sarosToPrint.length}</strong></span>
+        <span>Total Budget: <strong>${fmt(totalBudget)}</strong></span>
+        <span>Total Obligated: <strong>${fmt(totalObligated)}</strong></span>
+        <span>Utilization Rate: <strong>${utilRate}%</strong></span>
     </div>
     ${saroPrint || '<p style="text-align:center;color:#888;padding:20px;">No records for this year.</p>'}
-    <div class="rpt-footer">Total records: ${reportData.saros.length} &nbsp;|&nbsp; Report generated on ${now}</div>`;
+    <div class="rpt-footer">Total records: ${sarosToPrint.length} &nbsp;|&nbsp; Report generated on ${now}</div>`;
 
     const area = document.getElementById('print-area');
     area.style.display = 'block';
     window.print();
     window.onafterprint = () => { area.style.display = 'none'; };
 }
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.querySelector('.mobile-menu-btn');
+    const sidebar = document.querySelector('.sidebar');
+    const overlay = document.querySelector('.overlay');
+
+    if(btn && sidebar && overlay) {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sidebar.classList.add('open');
+            overlay.classList.add('show');
+        });
+        overlay.addEventListener('click', () => {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('show');
+        });
+    }
+});
 </script>
 </body>
 </html>

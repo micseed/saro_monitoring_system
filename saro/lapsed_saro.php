@@ -157,7 +157,73 @@ tbody td { padding: 14px 20px; font-size: 13px; color: #475569; }
 
 .action-btn-restore { color: #64748b; }
 .action-btn-restore:hover { background: #dcfce7; border-color: #bbf7d0; color: #16a34a; }
-</style>
+
+        /* Mobile Responsiveness */
+        @media (max-width: 768px) {
+            .sidebar {
+                position: absolute;
+                z-index: 50;
+                height: 100%;
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+            }
+            .sidebar.open {
+                transform: translateX(0);
+                box-shadow: 4px 0 24px rgba(0,0,0,0.1);
+            }
+            .topbar {
+                padding: 0 16px;
+                height: auto;
+                min-height: 64px;
+                flex-wrap: wrap;
+            }
+            .topbar-right {
+                margin-left: auto;
+            }
+            .content {
+                padding: 16px;
+            }
+            .stat-grid {
+                grid-template-columns: 1fr;
+            }
+            .panel-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+            .table-panel {
+                min-height: auto;
+                overflow-x: auto;
+            }
+            .mobile-menu-btn {
+                display: flex !important;
+                margin-right: 12px;
+                align-items: center;
+                justify-content: center;
+                background: none;
+                border: none;
+                cursor: pointer;
+                color: #64748b;
+            }
+            .overlay {
+                display: none;
+                position: fixed;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0,0,0,0.4);
+                z-index: 40;
+                opacity: 0;
+                transition: opacity 0.3s ease;
+            }
+            .overlay.show {
+                display: block;
+                opacity: 1;
+            }
+        }
+        @media (min-width: 769px) {
+            .mobile-menu-btn { display: none !important; }
+            .overlay { display: none !important; }
+        }
+    </style>
 </head><body>
 <div class="layout">
 <aside class="sidebar">
@@ -194,7 +260,8 @@ tbody td { padding: 14px 20px; font-size: 13px; color: #475569; }
     <a href="../logout.php" class="signout-btn"><svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>Sign Out</a>
   </div>
 </aside>
-<main class="main">
+    <div class="overlay"></div>
+    <main class="main">
   <header class="topbar">
     <div class="breadcrumb">
       <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m0 0l-7 7-7-7M19 10v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
@@ -478,4 +545,24 @@ document.getElementById('extendModal').addEventListener('click', function(e) {
     };
 </script>
 
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.querySelector('.mobile-menu-btn');
+    const sidebar = document.querySelector('.sidebar');
+    const overlay = document.querySelector('.overlay');
+
+    if(btn && sidebar && overlay) {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sidebar.classList.add('open');
+            overlay.classList.add('show');
+        });
+        overlay.addEventListener('click', () => {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('show');
+        });
+    }
+});
+</script>
 </body></html>

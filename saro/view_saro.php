@@ -866,6 +866,72 @@ if ($bur < 25) {
         /* Month select pair */
         .period-pair { display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px; }
         .period-label-sep { font-size:13px;color:#94a3b8;font-weight:500;text-align:center; }
+    
+        /* Mobile Responsiveness */
+        @media (max-width: 768px) {
+            .sidebar {
+                position: absolute;
+                z-index: 50;
+                height: 100%;
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+            }
+            .sidebar.open {
+                transform: translateX(0);
+                box-shadow: 4px 0 24px rgba(0,0,0,0.1);
+            }
+            .topbar {
+                padding: 0 16px;
+                height: auto;
+                min-height: 64px;
+                flex-wrap: wrap;
+            }
+            .topbar-right {
+                margin-left: auto;
+            }
+            .content {
+                padding: 16px;
+            }
+            .stat-grid {
+                grid-template-columns: 1fr;
+            }
+            .panel-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+            .table-panel {
+                min-height: auto;
+                overflow-x: auto;
+            }
+            .mobile-menu-btn {
+                display: flex !important;
+                margin-right: 12px;
+                align-items: center;
+                justify-content: center;
+                background: none;
+                border: none;
+                cursor: pointer;
+                color: #64748b;
+            }
+            .overlay {
+                display: none;
+                position: fixed;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0,0,0,0.4);
+                z-index: 40;
+                opacity: 0;
+                transition: opacity 0.3s ease;
+            }
+            .overlay.show {
+                display: block;
+                opacity: 1;
+            }
+        }
+        @media (min-width: 769px) {
+            .mobile-menu-btn { display: none !important; }
+            .overlay { display: none !important; }
+        }
     </style>
     <style>
         .fc { font-family: 'Poppins', sans-serif; }
@@ -971,6 +1037,7 @@ if ($bur < 25) {
     </aside>
 
     <!-- ══ Main ══ -->
+        <div class="overlay"></div>
     <main class="main">
 
         <!-- Topbar -->
@@ -2634,5 +2701,25 @@ if ($bur < 25) {
 </div>
 
 <script src="../assets/js/table_controls.js"></script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.querySelector('.mobile-menu-btn');
+    const sidebar = document.querySelector('.sidebar');
+    const overlay = document.querySelector('.overlay');
+
+    if(btn && sidebar && overlay) {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sidebar.classList.add('open');
+            overlay.classList.add('show');
+        });
+        overlay.addEventListener('click', () => {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('show');
+        });
+    }
+});
+</script>
 </body>
 </html>

@@ -15,13 +15,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $action = $_POST['action'];
 
     if ($action === 'request_password') {
-        $reason  = trim($_POST['reason'] ?? '');
-        $newPass = trim($_POST['new_password'] ?? '');
+        $reason   = trim($_POST['reason'] ?? '');
+        $newPass  = trim($_POST['new_password'] ?? '');
+        $currPass = $_POST['current_password'] ?? '';
+
+        $stmt = $conn->prepare("SELECT password FROM user WHERE userId = ?");
+        $stmt->execute([$userId]);
+        $user = $stmt->fetch();
+
+        if (!$user || !password_verify($currPass, $user['password'])) {
+            header('Location: settings.php?tab=password&err=wrong_password');
+            exit;
+        }
+
         $stmt = $conn->prepare("
             INSERT INTO password_requests (userId, reason, requested_new_password, status)
             VALUES (?, ?, ?, 'pending')
         ");
-        $stmt->execute([$userId, $reason ?: null, $newPass ?: null]);
+        $stmt->execute([$userId, $reason ?: '', $newPass ?: null]);
         header('Location: settings.php?tab=password&req=sent');
         exit;
     }
@@ -343,6 +354,72 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
         .modal-footer { padding: 16px 28px; border-top: 1px solid #f1f5f9; background: #fafbfe; display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-shrink: 0; }
         .modal-close-btn { width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.12); border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #fff; transition: background 0.2s ease; }
         .modal-close-btn:hover { background: rgba(255,255,255,0.22); }
+    
+        /* Mobile Responsiveness */
+        @media (max-width: 768px) {
+            .sidebar {
+                position: absolute;
+                z-index: 50;
+                height: 100%;
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+            }
+            .sidebar.open {
+                transform: translateX(0);
+                box-shadow: 4px 0 24px rgba(0,0,0,0.1);
+            }
+            .topbar {
+                padding: 0 16px;
+                height: auto;
+                min-height: 64px;
+                flex-wrap: wrap;
+            }
+            .topbar-right {
+                margin-left: auto;
+            }
+            .content {
+                padding: 16px;
+            }
+            .stat-grid {
+                grid-template-columns: 1fr;
+            }
+            .panel-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+            .table-panel {
+                min-height: auto;
+                overflow-x: auto;
+            }
+            .mobile-menu-btn {
+                display: flex !important;
+                margin-right: 12px;
+                align-items: center;
+                justify-content: center;
+                background: none;
+                border: none;
+                cursor: pointer;
+                color: #64748b;
+            }
+            .overlay {
+                display: none;
+                position: fixed;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0,0,0,0.4);
+                z-index: 40;
+                opacity: 0;
+                transition: opacity 0.3s ease;
+            }
+            .overlay.show {
+                display: block;
+                opacity: 1;
+            }
+        }
+        @media (min-width: 769px) {
+            .mobile-menu-btn { display: none !important; }
+            .overlay { display: none !important; }
+        }
     </style>
 </head>
 <body>
@@ -427,6 +504,7 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
     </aside>
 
     <!-- -- Main -- -->
+        <div class="overlay"></div>
     <main class="main">
 
         <!-- Topbar -->
@@ -583,6 +661,11 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
                                 <div class="alert alert-success" style="display:flex;margin-bottom:4px;">
                                     <svg class="alert-icon" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                                     <span>Your password change request has been submitted. The administrator will process it shortly.</span>
+                                </div>
+                                <?php elseif (isset($_GET['err']) && $_GET['err'] === 'wrong_password'): ?>
+                                <div class="alert alert-error" style="display:flex;margin-bottom:4px;">
+                                    <svg class="alert-icon" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                                    <span>Incorrect current password. Please try again.</span>
                                 </div>
                                 <?php endif; ?>
                                 <p style="font-size:13px;color:#64748b;line-height:1.7;margin-bottom:20px;">
@@ -754,7 +837,7 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
                 <div class="form-group" style="margin-bottom:0;">
                     <label class="form-label">Current Password</label>
                     <div class="input-wrap">
-                        <input type="password" class="form-input" id="currentPassword" placeholder="Enter your current password">
+                        <input type="password" class="form-input" id="currentPassword" name="current_password" placeholder="Enter your current password" required>
                         <button type="button" class="eye-btn" onclick="toggleEye('currentPassword', this)">
                             <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24" id="eye-currentPassword"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
                         </button>
@@ -881,17 +964,28 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
 
     /* -- Form submission -- */
     document.getElementById('pwRequestForm').addEventListener('submit', function(e) {
-        const newPw   = document.getElementById('newPassword').value;
-        const confirm = document.getElementById('confirmPassword').value;
+        const currentPw = document.getElementById('currentPassword').value;
+        const newPw     = document.getElementById('newPassword').value;
+        const confirm   = document.getElementById('confirmPassword').value;
 
         document.getElementById('errorAlert').style.display = 'none';
 
-        if (newPw && newPw.length < 6) {
+        if (!currentPw) {
+            e.preventDefault();
+            showError('Please enter your current password.');
+            return;
+        }
+        if (!newPw) {
+            e.preventDefault();
+            showError('Please enter your requested new password.');
+            return;
+        }
+        if (newPw.length < 6) {
             e.preventDefault();
             showError('Requested new password must be at least 6 characters long.');
             return;
         }
-        if (newPw && newPw !== confirm) {
+        if (newPw !== confirm) {
             e.preventDefault();
             showError('New password and confirm password do not match.');
             return;
@@ -919,6 +1013,26 @@ $lapsedCount    = (int)$conn->query("SELECT COUNT(*) FROM saro WHERE status='lap
     document.head.appendChild(style);
 
     // Notification dropdown
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.querySelector('.mobile-menu-btn');
+    const sidebar = document.querySelector('.sidebar');
+    const overlay = document.querySelector('.overlay');
+
+    if(btn && sidebar && overlay) {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sidebar.classList.add('open');
+            overlay.classList.add('show');
+        });
+        overlay.addEventListener('click', () => {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('show');
+        });
+    }
+});
 </script>
 </body>
 </html>

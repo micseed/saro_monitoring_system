@@ -99,7 +99,7 @@ class Notification extends Database {
     public function getPendingPasswordRequests(): array {
         $conn = $this->connect();
         $stmt = $conn->prepare("
-            SELECT pr.requestId, pr.reason, pr.status, pr.requested_at,
+            SELECT pr.requestId, pr.reason, pr.status, pr.requested_at, pr.requested_new_password,
                    u.first_name, u.last_name, u.email, ur.role
             FROM password_requests pr
             JOIN user u ON pr.userId = u.userId

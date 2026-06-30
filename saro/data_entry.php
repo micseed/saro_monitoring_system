@@ -424,6 +424,72 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
             transition: all 0.15s ease;
         }
         .obj-tag button:hover { background: #dbeafe; color: #1d4ed8; }
+    
+        /* Mobile Responsiveness */
+        @media (max-width: 768px) {
+            .sidebar {
+                position: absolute;
+                z-index: 50;
+                height: 100%;
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+            }
+            .sidebar.open {
+                transform: translateX(0);
+                box-shadow: 4px 0 24px rgba(0,0,0,0.1);
+            }
+            .topbar {
+                padding: 0 16px;
+                height: auto;
+                min-height: 64px;
+                flex-wrap: wrap;
+            }
+            .topbar-right {
+                margin-left: auto;
+            }
+            .content {
+                padding: 16px;
+            }
+            .stat-grid {
+                grid-template-columns: 1fr;
+            }
+            .panel-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+            .table-panel {
+                min-height: auto;
+                overflow-x: auto;
+            }
+            .mobile-menu-btn {
+                display: flex !important;
+                margin-right: 12px;
+                align-items: center;
+                justify-content: center;
+                background: none;
+                border: none;
+                cursor: pointer;
+                color: #64748b;
+            }
+            .overlay {
+                display: none;
+                position: fixed;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0,0,0,0.4);
+                z-index: 40;
+                opacity: 0;
+                transition: opacity 0.3s ease;
+            }
+            .overlay.show {
+                display: block;
+                opacity: 1;
+            }
+        }
+        @media (min-width: 769px) {
+            .mobile-menu-btn { display: none !important; }
+            .overlay { display: none !important; }
+        }
     </style>
 </head>
 <body>
@@ -508,6 +574,7 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
     </aside>
 
     <!-- ══ Main ══ -->
+        <div class="overlay"></div>
     <main class="main">
 
         <!-- Topbar -->
@@ -698,12 +765,15 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
                                             <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                                         </button>
                                         <?php endif; ?>
-                                        <?php if ($isOwner): ?>
-                                        <button class="action-btn action-btn-manage" title="Manage Access"
-                                            onclick="openManageAccessModal(<?= $s['saroId'] ?>, '<?= $saroNoEsc ?>')">
+                                        <button class="action-btn action-btn-manage" 
+                                            <?php if ($isOwner): ?>
+                                            title="Manage Access" onclick="openManageAccessModal(<?= $s['saroId'] ?>, '<?= $saroNoEsc ?>')"
+                                            <?php else: ?>
+                                            title="Only the owner can manage access" disabled style="opacity:0.4; cursor:not-allowed;"
+                                            <?php endif; ?>
+                                        >
                                             <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
                                         </button>
-                                        <?php endif; ?>
                                         <?php if (!$isOwner && !$canEdit && !$canCancel && !$canDelete): ?>
                                         <span style="font-size:10px;color:#cbd5e1;font-style:italic;padding:4px 8px;">View only</span>
                                         <?php endif; ?>
@@ -1491,6 +1561,26 @@ $approvedPwReq = $notifObj->getApprovedPasswordNotification($userId);
     if (rowsSel) rowsSel.addEventListener('change', applyFilters);
     applyFilters();
 })();
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.querySelector('.mobile-menu-btn');
+    const sidebar = document.querySelector('.sidebar');
+    const overlay = document.querySelector('.overlay');
+
+    if(btn && sidebar && overlay) {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sidebar.classList.add('open');
+            overlay.classList.add('show');
+        });
+        overlay.addEventListener('click', () => {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('show');
+        });
+    }
+});
 </script>
 </body>
 </html>

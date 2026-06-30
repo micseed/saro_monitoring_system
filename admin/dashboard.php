@@ -153,6 +153,72 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
         /* ── Show rows ── */
         .show-rows-wrap { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #64748b; font-weight: 500; }
         .show-rows-select { padding: 4px 8px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 11px; font-family: 'Poppins', sans-serif; color: #0f172a; background: #f8fafc; outline: none; cursor: pointer; }
+    
+        /* Mobile Responsiveness */
+        @media (max-width: 768px) {
+            .sidebar {
+                position: absolute;
+                z-index: 50;
+                height: 100%;
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+            }
+            .sidebar.open {
+                transform: translateX(0);
+                box-shadow: 4px 0 24px rgba(0,0,0,0.1);
+            }
+            .topbar {
+                padding: 0 16px;
+                height: auto;
+                min-height: 64px;
+                flex-wrap: wrap;
+            }
+            .topbar-right {
+                margin-left: auto;
+            }
+            .content {
+                padding: 16px;
+            }
+            .stat-grid {
+                grid-template-columns: 1fr;
+            }
+            .panel-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+            .table-panel {
+                min-height: auto;
+                overflow-x: auto;
+            }
+            .mobile-menu-btn {
+                display: flex !important;
+                margin-right: 12px;
+                align-items: center;
+                justify-content: center;
+                background: none;
+                border: none;
+                cursor: pointer;
+                color: #64748b;
+            }
+            .overlay {
+                display: none;
+                position: fixed;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0,0,0,0.4);
+                z-index: 40;
+                opacity: 0;
+                transition: opacity 0.3s ease;
+            }
+            .overlay.show {
+                display: block;
+                opacity: 1;
+            }
+        }
+        @media (min-width: 769px) {
+            .mobile-menu-btn { display: none !important; }
+            .overlay { display: none !important; }
+        }
     </style>
 </head>
 <body>
@@ -203,6 +269,12 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                 <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                 Export Records
             </a>
+        
+            <p class="nav-section-label">Configuration</p>
+            <a href="settings_admin.php" class="nav-item">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                Settings
+            </a>
         </nav>
 
         <div class="sidebar-footer">
@@ -221,6 +293,7 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
     </aside>
 
     <!-- ══ Main ══ -->
+        <div class="overlay"></div>
     <main class="main">
         <!-- Topbar -->
         <header class="topbar">
@@ -473,18 +546,18 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
                                     $reqName = htmlspecialchars($req['first_name'] . ' ' . $req['last_name']);
                                     $date = date('M d, Y', strtotime($req['requested_at']));
                                 ?>
-                                <div class="dash-req-item" style="padding:14px 22px;border-bottom:1px solid #f8fafc;display:flex;align-items:center;justify-content:space-between;gap:12px;">
-                                    <div style="display:flex;align-items:center;gap:10px;">
-                                        <span class="u-avatar" style="background:linear-gradient(135deg,#16a34a,#15803d);"><?= $reqInitials ?></span>
-                                        <div>
-                                            <p style="font-size:12px;font-weight:700;color:#0f172a;"><?= $reqName ?></p>
-                                            <p style="font-size:10px;color:#94a3b8;"><?= $date ?> · <?= htmlspecialchars($req['reason']) ?></p>
+                                <div class="dash-req-item" style="padding:14px 22px;border-bottom:1px solid #f8fafc;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:nowrap;">
+                                    <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">
+                                        <span class="u-avatar" style="background:linear-gradient(135deg,#16a34a,#15803d); flex-shrink:0;"><?= $reqInitials ?></span>
+                                        <div style="flex:1;min-width:0;">
+                                            <p style="font-size:12px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= $reqName ?></p>
+                                            <p style="font-size:10px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= $date ?> · <?= htmlspecialchars($req['reason']) ?></p>
                                         </div>
                                     </div>
-                                    <div style="display:flex;align-items:center;gap:6px;">
+                                    <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
                                         <span class="badge badge-amber"><span class="badge-dot"></span>Pending</span>
-                                        <button class="btn btn-success btn-sm" style="padding:4px 10px;" title="Approve"><svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></button>
-                                        <button class="btn btn-danger btn-sm" style="padding:4px 10px;" title="Reject"><svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+                                        <a href="password_requests.php" class="btn btn-success btn-sm" style="padding:4px 10px;" title="Approve"><svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></a>
+                                        <a href="password_requests.php" class="btn btn-danger btn-sm" style="padding:4px 10px;" title="Reject"><svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></a>
                                     </div>
                                 </div>
                             <?php endforeach; ?>
@@ -601,6 +674,26 @@ $pendingPwCount = $notifObj->countPendingPasswordRequests();
     if (reqSel) reqSel.addEventListener('change', applyReqs);
     applyReqs();
 })();
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.querySelector('.mobile-menu-btn');
+    const sidebar = document.querySelector('.sidebar');
+    const overlay = document.querySelector('.overlay');
+
+    if(btn && sidebar && overlay) {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sidebar.classList.add('open');
+            overlay.classList.add('show');
+        });
+        overlay.addEventListener('click', () => {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('show');
+        });
+    }
+});
 </script>
 </body>
 </html>

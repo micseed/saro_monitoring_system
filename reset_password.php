@@ -85,28 +85,36 @@ if ($token === '') {
     <link href="dist/output.css" rel="stylesheet">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,700;1,800;1,900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        * { font-family: 'Poppins', ui-sans-serif, system-ui, sans-serif; box-sizing: border-box; margin: 0; padding: 0; }
+        * { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; box-sizing: border-box; margin: 0; padding: 0; }
+        h1, h2, h3, h4, h5, h6, .brand-font { font-family: 'Outfit', sans-serif; }
         html, body { height: 100%; }
-        body { display: flex; min-height: 100vh; }
+
+        body {
+            display: flex;
+            flex-direction: row-reverse;
+            min-height: 100vh;
+            background: #ffffff;
+        }
 
         .left-panel {
             width: 50%; display: flex; flex-direction: column;
             background: #fff; padding: 40px 64px; overflow-y: auto;
         }
         .right-panel {
-            width: 50%; position: relative;
-            background-image: url('assets/dict_bg.jpg');
-            background-size: cover; background-position: center;
-            display: flex; align-items: center; justify-content: center; padding: 48px;
+            width: 50%;
+            position: relative;
+            background: url('assets/dict_bg.jpg') center/cover no-repeat;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 48px;
         }
-        .right-overlay { position: absolute; inset: 0; background: linear-gradient(145deg, rgba(8,18,52,0.92) 0%, rgba(29,78,216,0.80) 100%); }
-        .right-card {
-            position: relative; z-index: 1;
-            background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.15);
-            backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-            border-radius: 20px; padding: 48px 40px; max-width: 440px; width: 100%;
+        .right-overlay {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(8,18,52,0.9) 0%, rgba(14,40,100,0.8) 100%);
         }
 
         .form-label { display: block; font-size: 12px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 7px; }
@@ -312,27 +320,6 @@ if ($token === '') {
 <!-- ══ Right Panel ══ -->
 <div class="right-panel">
     <div class="right-overlay"></div>
-    <div class="right-card">
-        <div style="width:72px;height:72px;border-radius:50%;border:2px solid rgba(255,255,255,0.5);
-                    background:#fff;padding:6px;margin-bottom:24px;
-                    display:flex;align-items:center;justify-content:center;">
-            <img src="assets/dict_logo.png" alt="DICT Logo" style="width:100%;height:100%;object-fit:contain;">
-        </div>
-        <p style="font-size:10px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:0.18em;margin-bottom:10px;">
-            DICT &mdash; Region IX &amp; BASULTA
-        </p>
-        <h3 style="font-size:clamp(22px,2.8vw,32px);font-weight:900;color:#fff;
-                    text-transform:uppercase;line-height:1.15;letter-spacing:-0.02em;margin-bottom:16px;">
-            SARO<br>Monitoring<br>
-            <span style="background:linear-gradient(90deg,#60a5fa,#bfdbfe);
-                         -webkit-background-clip:text;-webkit-text-fill-color:transparent;
-                         background-clip:text;">System</span>
-        </h3>
-        <p style="font-size:14px;color:rgba(255,255,255,0.6);line-height:1.8;
-                  font-weight:400;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:28px;">
-            Centralized fund monitoring for Special Allotment Release Orders across the Zamboanga Peninsula and BASULTA cluster.
-        </p>
-    </div>
 </div>
 
 <script>
